@@ -1,0 +1,40 @@
+%%
+%% Copyright (c) 2026 Winford (UncleGrumpy) <winford@object.stream>
+%% All rights reserved.
+%%
+%% This is part of atomvm_spectrometer
+%%
+%% SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
+%% SPDX-License-Identifier: Apache-2.0
+
+{application, spectrometer, [
+    {description,
+        "Scan Erlang/OTP function usage for AtomVM portability audit"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        compiler,
+        syntax_tools,
+        inets,
+        ssl
+    ]},
+    {env, []},
+    {modules, [
+        atomvm_spectrometer,
+        spectrometer_analyzer,
+        spectrometer_atomvm,
+        spectrometer_help,
+        spectrometer_http,
+        spectrometer_otp,
+        spectrometer_reporter,
+        spectrometer_scanner,
+        spectrometer_updater,
+        spectrometer_utils,
+        spectrometer
+    ]},
+    {priv, "priv"},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.
