@@ -2,9 +2,6 @@
 %% Format: [{module, [{function, arity, platforms, since}]}]
 %% Platforms: 'all' or list of platform atoms [esp32, stm32, rp2, emscripten, generic_unix]
 %% Since: binary version string like <<"v0.5.0">> or {unreleased, <<"0.7.x">>}
-%%
-%% SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
-%% SPDX-License-Identifier: Apache-2.0
 
 [
     {ahttp_client, [

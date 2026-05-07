@@ -1,0 +1,78 @@
+#
+#  Copyright 2025 Winford (Uncle Grumpy) <winford@object.stream>
+#
+#  SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+#
+
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: "ubuntu-24.04"
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: ["27", "28", "master"]
+        include:
+          - otp: "27"
+            rebar3: "3.25.1"
+          - otp: "28"
+            rebar3: "3.26.0"
+          - otp: "29"
+            rebar3: "3.27.0"
+          - otp: "master"
+            rebar3: "3.27.0"
+    permissions:
+      contents: read
+    steps:
+
+    - name: "Setup BEAM"
+      id: beam-setup
+      uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9
+      with:
+        otp-version: ${{ matrix.otp }}
+        rebar3-version: ${{matrix.rebar3}}
+
+    - name: "System info"
+      run: |
+        echo "**uname:**"
+        uname -a
+        echo "**OTP version:**"
+        cat "$(dirname "$(which erlc)")/../releases/RELEASES" || true
+
+    - name: "Checkout repo"
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+    - name: "Restore rebar3 dialyzer and test-coverage cache"
+      id: test-cover_cache
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+      env:
+        cache-name: rebar3
+      with:
+        path: |
+          _build
+        key: ci-${{runner.os}}-${{env.cache-name}}-otp_${{matrix.otp}}-rebar_${{matrix.rebar3}}-${{hashFiles('rebar.config', 'rebar.lock')}}
+
+    # Build
+    - name: "Build escripts"
+      run: |
+        rebar3 escriptize
+
+    - name: "Build docs"
+      run: |
+        rebar3 as doc ex_doc
+
+    - name: "Run Tests"
+      run: |
+        rebar3 eunit
+        rebar3 cover
