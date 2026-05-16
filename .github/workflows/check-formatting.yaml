@@ -1,0 +1,100 @@
+#
+#  Copyright 2025 Winford (Uncle Grumpy) <winford@object.stream>
+#
+#  SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+#
+
+name: "Check Formatting"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'rebar.config'
+      - 'priv/*'
+      - 'src/**'
+      - 'include/**'
+      - 'test/**'
+      - '**/*.erl'
+      - '**/*.hrl'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'rebar.config'
+      - 'priv/*'
+      - 'src/**'
+      - 'include/**'
+      - 'test/**'
+      - '**/*.erl'
+      - '**/*.hrl'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  format-check:
+    runs-on: ubuntu-24.04
+    env:
+      ERLFMT_VERSION: "v1.7.0"
+      ACTIONLINT_VERSION: "v1.7.10"
+    permissions:
+      contents: read
+    steps:
+
+    - name: "Setup BEAM"
+      uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9
+      id: otp
+      with:
+        otp-version: "28"
+        rebar3-version: "3.26.0"
+
+    - name: "Checkout code"
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+    - name: "Cache: restore tools"
+      id: cache-tools
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+      env:
+        cache-name: format-checkers
+      with:
+        path: |
+          ~/go
+          ~/erlfmt
+        key: ci-${{runner.os}}-${{env.cache-name}}-${{env.ACTIONLINT_VERSION}}-otp_${{steps.otp.outputs.otp-version}}-rebar3_${{steps.otp.outputs.rebar3-version}}-erlfmt_${{env.ERLFMT_VERSION}}
+
+    - name: "Install Actionlint"
+      if: steps.cache-tools.outputs.cache-hit != 'true'
+      run: |
+        cd "${HOME}"
+        go install "github.com/rhysd/actionlint/cmd/actionlint@${{env.ACTIONLINT_VERSION}}"
+
+    - name: "Install erlfmt"
+      if: steps.cache-tools.outputs.cache-hit != 'true'
+      run: |
+        cd "${HOME}"
+        git clone --depth 1 -b "${ERLFMT_VERSION}" https://github.com/WhatsApp/erlfmt.git
+        cd erlfmt
+        rebar3 as release escriptize
+
+    - name: "Add tools to PATH"
+      run: |
+        echo "${HOME}/go/bin" >> "$GITHUB_PATH"
+        echo "${HOME}/erlfmt/_build/release/bin" >> "$GITHUB_PATH"
+
+    - name: "Check formatting"
+      run: |
+        rebar3 fmt --check
+
+    - name: "Check workflows"
+      run: actionlint
+
+    - name: "Check markdown"
+      uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd
+      with:
+        config: '.markdownlint.json'
+        globs: |
+          **/*.md
+          !_build/**

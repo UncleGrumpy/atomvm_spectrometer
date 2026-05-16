@@ -1,0 +1,55 @@
+#
+#  Copyright 2025 Winford (Uncle Grumpy) <winford@object.stream>
+#
+#  SPDX-License-Identifier: Apache-2.0
+#
+
+name: Code Quality Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref != 'refs/heads/main' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  code-quality:
+    runs-on: "ubuntu-24.04"
+    env:
+      OTP_VERSION: "28"
+      REBAR3_VERSION: "3.26.0"
+    permissions:
+      contents: read
+    steps:
+
+    - name: "Setup BEAM"
+      uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9
+      id: "beam"
+      with:
+        otp-version: ${{env.OTP_VERSION}}
+        rebar3-version: ${{env.REBAR3_VERSION}}
+
+    - name: "Checkout repo"
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+    - name: "Restore rebar3 cache (speed up dialyzer)"
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
+      env:
+        cache-name: rebar3
+      with:
+        path: |
+          ~/.cache/rebar3
+          _build
+        key: ci-${{runner.os}}-${{env.cache-name}}-otp_${{env.OTP_VERSION}}-rebar_${{env.REBAR3_VERSION}}-${{hashFiles('rebar.config')}}
+
+    # xref
+    - name: "Check with xref"
+      run: rebar3 xref
+
+    # dialyzer
+    - name: "Check with dialyzer"
+      run: rebar3 dialyzer
