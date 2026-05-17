@@ -13,6 +13,9 @@ This dataset can also be filtered to only list the most frequently used MFA
 that AtomVM does not currently support. AtomVM-supported MFA can be listed or
 queried by module:function or full module:function/arity.
 
+The ecosystem scanning and filtering is based on Paul Guyot's GitHub Gist
+[pguyot/beam_stats.escript](https://gist.github.com/pguyot/da327972f1ecdb7041c97addd4e76bb5).
+
 ## Dependencies
 
 This tool uses `git` for gathering ecosystem data and scanning repositories for
