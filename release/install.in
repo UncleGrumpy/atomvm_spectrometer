@@ -1,0 +1,127 @@
+#!/bin/sh
+#
+# This file is part of atomvm_spectrometer
+#
+# Copyright 2026 Winford (UncleGrumpy) <winford@object.stream>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
+# SPDX-License-Identifier: Apache-2.0
+#
+
+# Install script for the spectrometer utility.
+#
+# This script will install the spectrometer utility in a given location
+# on the user's machine.  You may provide the prefix location for the
+# installation, otherwise the default /usr/local directory will be used.
+#
+# Syntax: install.sh [prefix]
+#     where [prefix] is the optional prefix location for the install
+#     (defaults to /usr/local)
+#
+# This script will install a self-contained spectrometer installation, including
+# ERTS as built for the target platform.  Effort is made to not conflict
+# with any other ERTS or Erlang installations already on the machine.
+#
+# After installation, users may run <prefix>/bin/spectrometer on the
+# command line.  (Some installation locations will provide this automatically
+# in the user's PATH - like the default /usr/local, and possibly $HOME/.local
+# depending on the OS and user environment)
+#
+
+set -e
+
+readonly MARKER="ARCHIVE:"
+
+readonly nargs="${#}"
+if [ "${nargs}" -gt 2 ]; then
+    echo
+    echo "Syntax: ${0} <prefix>"
+    echo "    where <prefix> is the optional prefix location for the install"
+    echo "    (defaults to /usr/local, may require root privileges)"
+    echo
+    exit 1
+fi
+if [ -n "${1}" ]; then
+    readonly prefix="${1}"
+else
+    readonly prefix="/usr/local"
+fi
+if [ ! -d "${prefix}" ]; then
+    echo "ERROR! Prefix dir ${prefix} must exist!"
+    exit 1
+fi
+
+if [ -n "${2}" ] && [ "${2}" != "--force" ]; then
+    echo "ERROR! Invalid second argument ${2}!"
+    echo "Syntax: $0 <prefix> [--force]"
+    echo "    where <prefix> is the optional prefix location for the install"
+    echo "    (defaults to /usr/local, may require root privileges)"
+    echo "    and --force will force installation even if version check fails"
+    exit 1
+else 
+    if [ -n "${2}" ] && [ "${2}" = "--force" ]; then
+        readonly force_install="true"
+    else
+        readonly force_install="false"
+    fi
+fi
+
+readonly version="{{ release_version }}"
+
+echo_run() {
+    echo "# $(date) [$(hostname)]> ${*}"
+    "${@}"
+}
+
+tmp_dir="$(mktemp -d /tmp/atomvm_spectrometer.XXXXXX)"
+readonly tmp_dir
+readonly dest_dir="${prefix}/lib/atomvm_spectrometer"
+if [ -x "${prefix}/bin/spectrometer" ]; then
+    installed_version="$("${prefix}"/bin/spectrometer version)"
+    if [ "${installed_version}" = "${version}" ] && [ "${force_install}" != "true" ]; then
+        echo "ERROR! It looks like ${version} is already installed! Use --force to override"
+        exit 1
+    fi
+fi
+
+skip=$(awk "/^${MARKER}\$/ {print NR+1; exit 0}" "$0")
+if [ -z "${skip}" ]; then
+    echo "Archive marker not found in installer!" >&2
+    exit 1
+fi
+
+# Extract the embedded tar.gz
+echo "# $(date) [$(hostname)] preparing installation..."
+tail -n +"${skip}" "${0}" | tar -xz -C "${tmp_dir}" || {
+    echo "Extraction failed!" >&2
+    exit 1
+}
+
+echo_run mkdir -p "${dest_dir}"
+echo_run cp -fr "${tmp_dir}" "${dest_dir}"
+
+echo_run mkdir -p "${prefix}/bin"
+echo_run mv "${dest_dir}/bin/spectrometer.sh" "${prefix}/bin/spectrometer"
+echo_run chmod 755 "${prefix}/bin/spectrometer"
+## remove the unusable/unnecessary base install script (does not include archive)
+echo_run rm "${dest_dir}/install.sh"
+
+echo_run rm -rf "${tmp_dir}"
+echo "atomvm_spectrometer version ${version} installed in ${dest_dir}."
+exit 0
+
+# Marker for the archive
+# shellcheck disable=SC2317
+ARCHIVE:
