@@ -5,9 +5,13 @@ SPDX-License-Identifier: Apache-2.0
 
 # spectrometer
 
-Analyze the atomic signatures of the BEAM ecosystem against the AtomVM spectrum
-to instantly determine compatibility and porting effort across Hex.pm and
-GitHub packages.
+This is a multi-purpose tool for examining the BEAM ecosystem as well as
+AtomVM-supported OTP functions. A dataset can be created and filtered to find
+the most common MFA usage of OTP libraries/applications across the Erlang
+(support is planned for Elixir as well) ecosystem on hex.pm and GitHub.com.
+This dataset can also be filtered to only list the most frequently used MFA
+that AtomVM does not currently support. AtomVM-supported MFA can be listed or
+queried by module:function or full module:function/arity.
 
 ## Dependencies
 
@@ -42,7 +46,7 @@ installed system-wide.
 | `supported`| List all AtomVM-supported OTP functions                                           |
 | `filter`   | Filter ecosystem scan results (use `--avm` for unsupported only)                  |
 | `update`   | Regenerate supported functions database from AtomVM sources                       |
-| `query`    | Query whether a specific OTP function is supported                                |
+| `query`    | Query whether a specific OTP function is supported by AtomVM                      |
 
 _*_ _GitHub repo, Hex package, or directory_
 
