@@ -1,0 +1,89 @@
+#!/bin/sh
+#
+# This file is part of atomvm_spectrometer
+#
+# Copyright 2026 Winford (UncleGrumpy) <winford@object.stream>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
+# SPDX-License-Identifier: Apache-2.0
+#
+
+# Uninstall script for the spectrometer utility.
+#
+# This script will uninstall the spectrometer utility and delete any user cache
+# directories in the default locations.
+#
+
+set -e
+
+prefix="$(cd "$(dirname "${0}")/../.." && pwd)"
+readonly prefix
+
+echo "Uninstalling atomvm_spectrometer from prefix: ${prefix}..."
+
+case "${1}" in
+    "--full"|"-f")
+        readonly full="true"
+        ;;
+    "")
+        readonly full="false"
+        ;;
+    *)
+        echo "Unrecognized option: ${1}"
+        exit 1
+        ;;
+esac
+
+echo_run() {
+    echo "# $(date) [$(hostname)]> ${*}"
+    "${@}"
+}
+
+if [ -e "${prefix}/bin/spectrometer" ]; then
+    echo_run rm -f "${prefix}/bin/spectrometer"
+else
+    echo "# $(date) [$(hostname)] Launcher script not found, skipping."
+fi
+
+readonly install_dir="${prefix}/lib/atomvm_spectrometer"
+if [ -d "${install_dir}" ]; then
+    echo_run rm -fr "${install_dir}"
+else
+    echo "# $(date) [$(hostname)] Warning no atomvm_spectrometer install found!"
+fi
+
+OS=$(uname -s)
+case "${OS}" in
+    "Darwin")
+        readonly cache_dir="${HOME}/Library/Caches/spectrometer"
+        ;;
+    "Linux")
+        readonly cache_dir="${HOME}/.cache/spectrometer"
+        ;;
+    *)
+        readonly cache_dir=""
+        ;;
+esac
+
+if [ -d "${cache_dir}" ] && [ "${full}" = "true" ]; then
+    echo_run rm -fr "${cache_dir}"
+else
+    if [ "${full}" = "true" ]; then
+        echo "# $(date) [$(hostname)] User cache not found, skipping."
+    fi
+fi
+
+echo "atomvm_spectrometer has been uninstalled."
+exit 0

@@ -9,7 +9,7 @@
 
 {application, spectrometer, [
     {description, "Scan Erlang/OTP function usage for AtomVM support"},
-    {vsn, "0.1.0-pre"},
+    {vsn, "{{release_version}}"},
     {registered, []},
     {applications, [
         kernel,

@@ -13,6 +13,9 @@ This dataset can also be filtered to only list the most frequently used MFA
 that AtomVM does not currently support. AtomVM-supported MFA can be listed or
 queried by module:function or full module:function/arity.
 
+The ecosystem scanning and filtering is based on Paul Guyot's GitHub Gist
+[pguyot/beam_stats.escript](https://gist.github.com/pguyot/da327972f1ecdb7041c97addd4e76bb5).
+
 ## Dependencies
 
 This tool uses `git` for gathering ecosystem data and scanning repositories for
@@ -35,6 +38,55 @@ This compiles the application modules. To produce a standalone executable:
 This bundles all modules into a single escript at
 `_build/default/bin/spectrometer`, which can be run directly or
 installed system-wide.
+
+## Install
+
+Prepare the application for installation:
+
+    rebar3 as prod release
+    rebar3 as prod tar
+
+Thanks to the magic of rebar3 post-hooks this will create an executable
+self-extracting install script that can take an optional install prefix
+directory, or use the default `/usr/local` (this will likely require root
+privileges).
+
+Example for a user install on Linux:
+
+    _build/prod/rel/atomvm_spectrometer/install.sh ${HOME}/.local
+
+Or for a system-wide install to the default directory
+
+    sudo _build/prod/rel/atomvm_spectrometer/install.sh
+
+This will install the runtime and application into
+`<prefix>/lib/atomvm_spectrometer/` and an executable launcher as
+`<prefix>/bin/spectrometer`, for convenience make sure `<prefix>/bin` is in
+the user PATH. If not already present, it can be added permanently by adding
+`export PATH="${PATH}:<prefix>/bin"` to $HOME/.bashrc or the config file for
+your shell of choice.
+
+### Uninstall
+
+The installation includes an uninstall script that will remove all the
+application files, and optionally clean up the user cache directory too.
+
+To uninstall atomvm_spectrometer run:
+
+    sh ${INSTALL_PREFIX}/lib/atomvm_spectrometer/uninstall.sh
+
+If the application is installed to `/usr/local` and required sudo for
+installation then sudo will be required to uninstall.
+
+To uninstall and delete any user cache files run:
+
+    sh ${INSTALL_PREFIX}/lib/atomvm_spectrometer/uninstall.sh --full
+
+You may also use the short option `-f` for a full uninstall of the
+application and user cache files. If sudo was required for installation then
+it will be needed to uninstall, and will miss cleanup of any user cache files
+from users other than root. If this is a concern use an install prefix in the
+users home directory, such as `~/.local`.
 
 ## Commands
 

@@ -58,12 +58,11 @@ jobs:
       id: cache-tools
       uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306
       env:
-        cache-name: format-checkers
+        cache-name: tools
       with:
         path: |
           ~/go
-          ~/erlfmt
-        key: ci-${{runner.os}}-${{env.cache-name}}-${{env.ACTIONLINT_VERSION}}-otp_${{steps.otp.outputs.otp-version}}-rebar3_${{steps.otp.outputs.rebar3-version}}-erlfmt_${{env.ERLFMT_VERSION}}
+        key: ci-${{runner.os}}-${{env.cache-name}}-${{env.ACTIONLINT_VERSION}}
 
     - name: "Install Actionlint"
       if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -71,22 +70,13 @@ jobs:
         cd "${HOME}"
         go install "github.com/rhysd/actionlint/cmd/actionlint@${{env.ACTIONLINT_VERSION}}"
 
-    - name: "Install erlfmt"
-      if: steps.cache-tools.outputs.cache-hit != 'true'
-      run: |
-        cd "${HOME}"
-        git clone --depth 1 -b "${ERLFMT_VERSION}" https://github.com/WhatsApp/erlfmt.git
-        cd erlfmt
-        rebar3 as release escriptize
-
-    - name: "Add tools to PATH"
+    - name: "Add actionlint to PATH"
       run: |
         echo "${HOME}/go/bin" >> "$GITHUB_PATH"
-        echo "${HOME}/erlfmt/_build/release/bin" >> "$GITHUB_PATH"
 
     - name: "Check formatting"
       run: |
-        rebar3 fmt --check
+        rebar3 as check fmt --check
 
     - name: "Check workflows"
       run: actionlint
