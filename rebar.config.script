@@ -41,6 +41,7 @@ Version =
         {files, [
             "rebar.config{,.script}",
             "src/**/*.{hrl,erl,app.src}",
+            "include/*.hrl"
             "priv/supported_functions.data",
             "test/**/*.{hrl,erl}"
         ]}
@@ -137,7 +138,7 @@ Version =
         ]}
     ]},
     {provider_hooks, [
-        {pre, [{release, escriptize}]}
+        {pre, [{release, escriptize}, {tar, escriptize}]}
     ]},
     {post_hooks, [
         {release,

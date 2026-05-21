@@ -388,9 +388,15 @@ start_applications() ->
 system_temp_dir() ->
     case os:getenv("TEMPDIR") of
         false ->
-            os:getenv("TEMP", os_temp_dir());
-        Temp ->
-            Temp
+            case os:getenv("TEMP") of
+                false -> os_temp_dir();
+                Temp when Temp =/= "" -> Temp;
+                _ -> os_temp_dir()
+            end;
+        Temp when Temp =/= "" ->
+            Temp;
+        _ ->
+            os_temp_dir()
     end.
 
 os_temp_dir() ->

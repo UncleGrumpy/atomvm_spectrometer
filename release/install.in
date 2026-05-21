@@ -90,9 +90,14 @@ readonly tmp_dir
 readonly dest_dir="${prefix}/lib/atomvm_spectrometer"
 if [ -x "${prefix}/bin/spectrometer" ]; then
     installed_version="$("${prefix}"/bin/spectrometer version)"
-    if [ "${installed_version}" = "${version}" ] && [ "${force_install}" != "true" ]; then
-        echo "ERROR! It looks like ${version} is already installed! Use --force to override"
-        exit 1
+    if [ "${installed_version}" = "${version}" ]; then
+        if [ "${force_install}" != "true" ]; then
+            echo "ERROR! It looks like ${version} is already installed! Use --force to override"
+            exit 1
+        else
+            sh "${prefix}/lib/atomvm_spectrometer/uninstall.sh" || true
+            rm -rf "${prefix}/lib/atomvm_spectrometer"
+        fi
     fi
 fi
 

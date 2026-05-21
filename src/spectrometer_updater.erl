@@ -92,8 +92,11 @@ update_datafile(Opts, OutputFile) ->
                             "Loading bundled data set from ~s\n", [Datafile]
                         ),
                         build_db_from_list(Data);
-                    {ok, [_]} ->
-                        % Bundled file exists but has invalid structure
+                    {ok, _} ->
+                        io:format(
+                            "Ignoring invalid data set in ~s, starting with empty data\n",
+                            [OutputFile]
+                        ),
                         #{};
                     {error, enoent} ->
                         io:format(
