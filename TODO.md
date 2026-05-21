@@ -9,16 +9,10 @@ SPDX-License-Identifier: Apache-2.0
 
 ### Elixir support
 
-All of the current functions only work for the Erlang ecosystem. Support needs
-to be added for all commands.
+Support fo scanning the Elixir ecosystem needs to be added.
 
-* `ecosystem` command should have an --elixir option for creating an Elixir
+* `ecosystem` command should have an --elixir (or --ex) option for creating an Elixir
 ecosystem data-set.
-* `update` and `audit` commands should automatically include `exavmlib` in the
-supported functions data and lookups.
-* `supported` command should list all supported modules/functions by default
-and accept optional `--erl` and `--ex` flags to filter the modules/functions
-output to only the selected language.
 
 ### Change data structure for stored version info
 

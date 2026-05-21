@@ -129,7 +129,7 @@ Or use `-h` or `--help` option:
 
 ### Audit a single target
 
-    spectrometer audit --github https://github.com/ninenines/cowboy
+    spectrometer audit --github https://github.com/atomvm/atomvm_packbeam
     spectrometer audit --hex jsx
     spectrometer audit --hex cowboy --version 3.1.0
     spectrometer audit --dir /path/to/project
@@ -150,14 +150,29 @@ Or use `-h` or `--help` option:
 
 ### Query function support
 
+Functions can be queried by specific arity, or arity may be omitted.
+
     spectrometer query lists:map
     spectrometer query lists:map/2
+
+#### Elixir function support
+
+Elixir functions can be queried using several formats:
+
+    spectrometer query Elixir.List.keyfind
+    spectrometer query List.keyfind
+    spectrometer query Elixir.List.keyfind/4
+    spectrometer query List.keyfind/4
 
 ### List supported functions
 
     spectrometer supported
     spectrometer supported --module gen_server
     spectrometer supported -m lists
+    spectrometer supported -m Elixir.List
+    spectrometer supported -m List
+    spectrometer supported --ex     # Show only Elixir functions
+    spectrometer supported --erl    # Show only Erlang functions
 
 ### Regenerate supported functions database
 

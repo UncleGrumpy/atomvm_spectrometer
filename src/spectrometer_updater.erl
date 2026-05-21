@@ -265,8 +265,8 @@ update_datafile(Opts, OutputFile) ->
 -doc """
 Scan an AtomVM repo and return supported functions with platform information.
 
-Parses gperf files, platform NIFs, Erlang library exports, and (optionally)
-test files to discover supported functions. Returns a map from
+Parses gperf files, platform NIFs, Erlang and Elixir library exports, and
+(optionally) test files to discover supported functions. Returns a map from
 `{Module, Function, Arity}` to `{Platforms, Since}` entries.
 
 #### Arguments
@@ -311,14 +311,16 @@ scan_atomvm_repo(RepoDir, Opts, Since) ->
     Acc3 = scan_platform_nifs(PlatformsDir, Acc2, Since),
     io:format("  Scanning Erlang library sources...\n"),
     Acc4 = scan_erlang_libs(LibsDir, Acc3, Since),
+    % Scan Elixir libraries (exavmlib) for def exports
+    Acc5 = scan_elixir_libs(LibsDir, Acc4, Since),
     case maps:get(tests, Opts, true) of
         true ->
             io:format("  Scanning test files for external calls...\n"),
-            Acc5 = scan_test_files(TestsDir, Acc4, Since),
-            finalize(Acc5);
+            Acc6 = scan_test_files(TestsDir, Acc5, Since),
+            finalize(Acc6);
         false ->
             io:format("  Skipping test file scan (disabled)\n"),
-            finalize(Acc4)
+            finalize(Acc5)
     end.
 
 -doc false.
@@ -359,8 +361,8 @@ write_db_file(Path, Acc) ->
     ),
     Header = [
         "%% Supported AtomVM functions - machine generated, edit with extreme caution.\n",
-        "%% Format: [{module, [{function, arity, platforms, since}]}]\n",
-        "%% Platforms: 'all' or list of platform atoms [esp32, stm32, rp2, emscripten, generic_unix]\n",
+        "%% Format: [{Module, [{Function, Arity, Platforms, Since}]}]\n",
+        "%% Platforms: 'all' or list of supported platform atoms [esp32, stm32, rp2, emscripten, generic_unix]\n",
         "%% Since: binary version string like <<\"v0.5.0\">> or {unreleased, <<\"0.7.x\">>}\n",
         "\n",
         "[\n"
@@ -430,7 +432,7 @@ branch_to_since(Branch) ->
 branch_sort_key(<<"main">>) ->
     {3, <<>>};
 branch_sort_key(<<"release-", Version/binary>>) ->
-    {2, parse_release_version(Version)};
+    {2, parse_release_branch_version(Version)};
 branch_sort_key(Branch) ->
     case binary:split(Branch, <<".">>, [global]) of
         [Major, Minor, <<"x">>] ->
@@ -444,14 +446,24 @@ branch_sort_key(Branch) ->
             {1, Branch}
     end.
 
-%% Parse a release version string like "0.7" into {0, 7}.
-parse_release_version(Version) ->
+%% Parse a release branch version string like "0.7" into {0, 7}.
+parse_release_branch_version(Version) ->
     Parts = binary:split(Version, <<".">>, [global]),
     case Parts of
         [Major, Minor | _] ->
-            {binary_to_integer(Major), binary_to_integer(Minor)};
+            case is_digit_binary(Major) andalso is_digit_binary(Minor) of
+                true ->
+                    {binary_to_integer(Major), binary_to_integer(Minor)};
+                false ->
+                    {0, 0}
+            end;
         [Major] ->
-            {binary_to_integer(Major), 0};
+            case is_digit_binary(Major) of
+                true ->
+                    {binary_to_integer(Major), 0};
+                false ->
+                    {0, 0}
+            end;
         _ ->
             {0, 0}
     end.
@@ -490,8 +502,8 @@ parse_semver_base(Base) ->
             try
                 Maj = list_to_integer(Major),
                 Min = list_to_integer(Minor),
-                Pat = list_to_integer(Patch),
-                {ok, {Maj, Min, Pat}}
+                Pch = list_to_integer(Patch),
+                {ok, {Maj, Min, Pch}}
             catch
                 _:badarg -> {error, non_integer_version};
                 _:Reason -> {error, Reason}
@@ -732,7 +744,7 @@ parse_platform_nifs(File, Platform, Acc, Since) ->
     end,
     parse_file_global(
         File,
-        "strcmp\\s*\\(\\s*\"([a-z_][a-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)/(\\d+)\"",
+        "strcmp\\s*\\(\\s*\"([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)/(\\d+)\"",
         MergeFun,
         Acc
     ).
@@ -953,8 +965,6 @@ find_first_match(Regex, [Line | Rest], Default) ->
     end.
 
 find_exports(Lines) ->
-    %% -export can span multiple lines. We need to collect all [ ... ] contents.
-    %% Strategy: join all lines, find all -export( ... ) blocks, parse atoms/arities.
     Joined = lists:join(" ", Lines),
     case
         re:run(Joined, "-export\\s*\\(([^)]+)\\)", [
@@ -974,7 +984,6 @@ find_exports(Lines) ->
 
 parse_export_list(Content) ->
     Trimmed = string:trim(Content),
-    %% Remove surrounding brackets if present
     Inner =
         case Trimmed of
             [$[ | Rest] ->
@@ -1109,3 +1118,297 @@ find_erl_files(Dir, Acc) ->
         {error, _} ->
             Acc
     end.
+
+%% Scan Elixir library source files (.ex) for def exports
+%% Exavmlib modules are supported on all platforms
+scan_elixir_libs(LibsDir, Acc, Since) ->
+    ExavmlibDir = filename:join(LibsDir, "exavmlib"),
+    scan_exavmlib_dir(ExavmlibDir, Acc, all, Since).
+
+scan_exavmlib_dir(ExavmlibDir, Acc, Platforms, Since) ->
+    case filelib:is_dir(ExavmlibDir) of
+        true ->
+            ExFiles = find_ex_files(ExavmlibDir),
+            io:format("  Scanning exavmlib (~p .ex files)\n", [length(ExFiles)]),
+            lists:foldl(
+                fun(F, A) ->
+                    parse_elixir_file(F, A, Platforms, Since)
+                end,
+                Acc,
+                ExFiles
+            );
+        false ->
+            io:format("  Skipping exavmlib (not found)\n"),
+            Acc
+    end.
+
+%% Find all .ex files recursively in a directory
+find_ex_files(Dir) ->
+    find_ex_files(Dir, []).
+
+find_ex_files(Dir, Acc) ->
+    case file:list_dir(Dir) of
+        {ok, Entries} ->
+            lists:foldl(
+                fun(Name, A) ->
+                    Path = filename:join(Dir, Name),
+                    case file:read_link_info(Path) of
+                        {ok, #file_info{type = directory}} ->
+                            case Name of
+                                "_" ++ _ -> A;
+                                "." ++ _ -> A;
+                                _ -> find_ex_files(Path, A)
+                            end;
+                        {ok, #file_info{type = regular}} ->
+                            case filename:extension(Name) of
+                                ".ex" -> [Path | A];
+                                _ -> A
+                            end;
+                        _ ->
+                            A
+                    end
+                end,
+                Acc,
+                Entries
+            );
+        {error, _} ->
+            Acc
+    end.
+
+%% Parse a single .ex file which may contain multiple defmodule blocks.
+parse_elixir_file(File, Acc, Platforms, Since) ->
+    case file:read_file(File) of
+        {ok, Bin} ->
+            Content = binary_to_list(Bin),
+            Lines = string:split(Content, "\n", all),
+            % Find all exports with their module context
+            Exports = find_elixir_exports(Lines),
+            lists:foldl(
+                fun({ModAtom, FunName, Arity}, A) ->
+                    Key = {ModAtom, FunName, Arity},
+                    maps:put(Key, {Platforms, Since}, A)
+                end,
+                Acc,
+                Exports
+            );
+        {error, _} ->
+            Acc
+    end.
+
+%% Get leading indentation length (number of leading spaces) from a line
+get_indent(Line) ->
+    get_indent(Line, 0).
+
+get_indent([$\s | Rest], Count) ->
+    get_indent(Rest, Count + 1);
+get_indent(_, Count) ->
+    Count.
+
+%% Find all def exports with their module context.
+%% Scans for defmodule/defimpl to track the active module, then associates
+%% each def with its enclosing module. Returns [{ModuleNameAtom, FunName, Arity}].
+%% ModuleStack entries are {ModAtom, ModIndent} tuples.
+find_elixir_exports(Lines) ->
+    find_elixir_exports(Lines, [], undefined, []).
+
+find_elixir_exports([], _ModuleStack, _CurrentModule, Acc) ->
+    lists:reverse(Acc);
+find_elixir_exports(
+    [Line | Rest], ModuleStack, CurrentModule, Acc
+) ->
+    case find_elixir_module_def(Line) of
+        {defmodule, ModName} ->
+            % Entering a new defmodule block - track its indentation
+            ModAtom = spectrometer_utils:atom_from_string("Elixir." ++ ModName),
+            Indent = get_indent(Line),
+            find_elixir_exports(
+                Rest, [{ModAtom, Indent} | ModuleStack], ModAtom, Acc
+            );
+        {defimpl, ProtocolName} ->
+            % Entering a defimpl block (also counts as a module context)
+            % Without explicit for, just use the protocol name
+            ModAtom = spectrometer_utils:atom_from_string(
+                "Elixir." ++ ProtocolName
+            ),
+            Indent = get_indent(Line),
+            find_elixir_exports(
+                Rest, [{ModAtom, Indent} | ModuleStack], ModAtom, Acc
+            );
+        {defimpl, ProtocolName, TargetName} ->
+            % Entering a defimpl Protocol, for: Target block
+            ModAtom = spectrometer_utils:atom_from_string(
+                "Elixir." ++ ProtocolName ++ "." ++ TargetName
+            ),
+            Indent = get_indent(Line),
+            find_elixir_exports(
+                Rest, [{ModAtom, Indent} | ModuleStack], ModAtom, Acc
+            );
+        {end_block} ->
+            % Pop module scope if end line indentation matches top module's indentation
+            EndIndent = get_indent(Line),
+            case ModuleStack of
+                [{_ModAtIndent, ModIndent} | RestStack] when
+                    EndIndent =< ModIndent
+                ->
+                    % This end closes the module/impl block - pop the stack
+                    NewCurrent =
+                        case RestStack of
+                            [] -> undefined;
+                            [{NewHead, _} | _] -> NewHead
+                        end,
+                    find_elixir_exports(
+                        Rest, RestStack, NewCurrent, Acc
+                    );
+                _ ->
+                    % No module at this indent or no module on stack - stay unchanged
+                    find_elixir_exports(
+                        Rest, ModuleStack, CurrentModule, Acc
+                    )
+            end;
+        error ->
+            % Check for regular def inside a module
+            case find_elixir_def(Line) of
+                {ok, FunName, Args} ->
+                    Arity = count_arity(Args),
+                    FunAtom = spectrometer_utils:atom_from_string(FunName),
+                    Export =
+                        case CurrentModule of
+                            undefined ->
+                                % Fallback: use filename-based module (shouldn't happen normally)
+                                {unknown, FunAtom, Arity};
+                            ModAtom ->
+                                {ModAtom, FunAtom, Arity}
+                        end,
+                    find_elixir_exports(
+                        Rest, ModuleStack, CurrentModule, [Export | Acc]
+                    );
+                skip ->
+                    find_elixir_exports(
+                        Rest, ModuleStack, CurrentModule, Acc
+                    )
+            end
+    end.
+
+%% Detect module boundary lines: defmodule, defimpl, end
+find_elixir_module_def(Line) ->
+    % Check for end keyword (closing a module/impl block)
+    case re:run(Line, "^\\s*end\\s*$", [{capture, none}]) of
+        match ->
+            {end_block};
+        nomatch ->
+            % Check for defmodule Name do (require "do" after module name)
+            case
+                re:run(
+                    Line,
+                    "^\\s*defmodule\\s+([A-Za-z_][A-Za-z0-9_.]*)\\s+do\\b",
+                    [
+                        {capture, all_but_first, list}
+                    ]
+                )
+            of
+                {match, [ModName]} ->
+                    {defmodule, ModName};
+                nomatch ->
+                    % Check for defimpl Protocol, for: Module do
+                    case
+                        re:run(
+                            Line,
+                            "^\\s*defimpl\\s+([A-Za-z_][A-Za-z0-9_.]*),\\s*for:\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s+do\\b",
+                            [{capture, all_but_first, list}]
+                        )
+                    of
+                        {match, [ProtocolName, TargetName]} ->
+                            {defimpl, ProtocolName, TargetName};
+                        nomatch ->
+                            % Fallback: just protocol name without explicit for (require "do")
+                            case
+                                re:run(
+                                    Line,
+                                    "^\\s*defimpl\\s+([A-Za-z_][A-Za-z0-9_.]*)\\s+do\\b",
+                                    [{capture, all_but_first, list}]
+                                )
+                            of
+                                {match, [ImplName]} -> {defimpl, ImplName};
+                                nomatch -> error
+                            end
+                    end
+            end
+    end.
+
+%% Match "def " or "defimpl " at beginning of line, then function name
+%% with parentheses. This ensures we don't match defp or comments/strings.
+find_elixir_def(Line) ->
+    % Check for defp first - if found, this is a private function
+    case string:find(Line, "defp ") of
+        nomatch ->
+            find_elixir_def_impl(Line);
+        _ ->
+            skip
+    end.
+
+find_elixir_def_impl(Line) ->
+    % Use re:run to check for "def " at start of line
+    case re:run(Line, "^\\s*def\\s+", [{capture, none}]) of
+        match ->
+            extract_function_from_line(Line);
+        nomatch ->
+            skip
+    end.
+
+extract_function_from_line(Line) ->
+    % Pattern: def function_name(args) or def function_name do
+    % We've already filtered out defp, so just match "def" followed by function name
+    % Function names can end with ? or ! (Elixir style).
+    % We need to match either:
+    %   1. "def name(args)" with optional whitespace around args
+    %   2. "def name do" for zero-arity functions
+    Parenthesized =
+        re:run(
+            Line,
+            "def\\s+([a-z_][a-z0-9_]*[?!]?)\\s*\\(([^)]*)\\)",
+            [{capture, all_but_first, list}]
+        ),
+    ZeroArity =
+        re:run(Line, "def\\s+([a-z_][a-z0-9_]*[?!]?)\\s+do\\b", [
+            {capture, all_but_first, list}
+        ]),
+    case Parenthesized of
+        {match, [FunName, Args]} ->
+            {ok, FunName, Args};
+        _ ->
+            case ZeroArity of
+                {match, [FunName]} ->
+                    {ok, FunName, ""};
+                _ ->
+                    skip
+            end
+    end.
+
+%% Count arity by counting top-level commas + 1 (minimum 0)
+count_arity("") ->
+    0;
+count_arity(Args) ->
+    CleanArgs = re:replace(Args, "\\s+", "", [global, {return, list}]),
+    case CleanArgs of
+        "" -> 0;
+        _ -> count_top_level_commas(CleanArgs) + 1
+    end.
+
+%% Count commas at nesting depth 0 only
+%% Track depth for (), [], and {}
+count_top_level_commas(Str) ->
+    count_top_level_commas(Str, 0, 0).
+
+count_top_level_commas([Char | Rest], Depth, Count) ->
+    case Char of
+        $( -> count_top_level_commas(Rest, Depth + 1, Count);
+        $[ -> count_top_level_commas(Rest, Depth + 1, Count);
+        ${ -> count_top_level_commas(Rest, Depth + 1, Count);
+        $) -> count_top_level_commas(Rest, Depth - 1, Count);
+        $] -> count_top_level_commas(Rest, Depth - 1, Count);
+        $} -> count_top_level_commas(Rest, Depth - 1, Count);
+        $, when Depth == 0 -> count_top_level_commas(Rest, Depth, Count + 1);
+        _ -> count_top_level_commas(Rest, Depth, Count)
+    end;
+count_top_level_commas([], _Depth, Count) ->
+    Count.

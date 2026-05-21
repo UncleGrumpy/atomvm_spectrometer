@@ -925,7 +925,7 @@ parse_export_list_basic_test_() ->
     {"parses basic export list", fun() ->
         ?assertEqual(
             [{bar, 2}, {foo, 1}],
-            lists:sort(spectrometer_updater:parse_export_list("[foo/1, bar/2]"))
+            lists:sort(spectrometer_updater:parse_export_list("[foo/1,bar/2]"))
         )
     end}.
 
@@ -933,7 +933,7 @@ parse_export_list_with_spaces_test_() ->
     {"handles spaces around commas", fun() ->
         ?assertEqual(
             [{bar, 2}, {foo, 1}],
-            lists:sort(spectrometer_updater:parse_export_list("foo/1, bar/2"))
+            lists:sort(spectrometer_updater:parse_export_list("foo/1 , bar/2"))
         )
     end}.
 
@@ -954,7 +954,7 @@ find_erl_files_test_() ->
                 ok = file:write_file(filename:join(Dir, "skip.txt"), ""),
                 Dir
             end,
-            fun(Dir) -> fun() -> spectrometer_utils:purge_dir(Dir) end end, fun(
+            fun(Dir) -> spectrometer_utils:purge_dir(Dir) end, fun(
                 Dir
             ) ->
                 ?_test(begin
@@ -999,9 +999,25 @@ find_elixir_module_def_defmodule_test_() ->
 find_elixir_module_def_defimpl_test_() ->
     {"detects defimpl declarations", fun() ->
         ?assertEqual(
+            {defimpl, "SomeProtocol", "SomeModule"},
+            spectrometer_updater:find_elixir_module_def(
+                "defimpl SomeProtocol, for: SomeModule do"
+            )
+        ),
+        ?assertEqual(
             {defimpl, "SomeProtocol"},
             spectrometer_updater:find_elixir_module_def(
-                "defimpl SomeProtocol for SomeModule do"
+                "defimpl SomeProtocol do"
+            )
+        )
+    end}.
+
+find_elixir_module_def_defimpl_for_test_() ->
+    {"detects defimpl for keyword", fun() ->
+        ?assertEqual(
+            {defimpl, "Enumerable", "List"},
+            spectrometer_updater:find_elixir_module_def(
+                "defimpl Enumerable, for: List do"
             )
         )
     end}.
@@ -1009,11 +1025,10 @@ find_elixir_module_def_defimpl_test_() ->
 find_elixir_module_def_end_test_() ->
     {"detects end keyword", fun() ->
         ?assertEqual(
-            end_defmodule, spectrometer_updater:find_elixir_module_def("end")
+            {end_block}, spectrometer_updater:find_elixir_module_def("end")
         ),
         ?assertEqual(
-            end_defmodule,
-            spectrometer_updater:find_elixir_module_def("  end  ")
+            {end_block}, spectrometer_updater:find_elixir_module_def("  end  ")
         )
     end}.
 
@@ -1097,7 +1112,7 @@ extract_function_from_line_no_parens_test_() ->
 extract_function_from_line_error_test_() ->
     {"returns error for malformed lines", fun() ->
         ?assertEqual(
-            error, spectrometer_updater:extract_function_from_line("def")
+            skip, spectrometer_updater:extract_function_from_line("def")
         )
     end}.
 

@@ -22,8 +22,11 @@ directory removal, and GitHub URL normalization for deduplication.
     atom_from_string/1,
     clone_temp_repo/2,
     bundled_data_path/0,
+    is_elixir_module_name/1,
     make_temp_dir/1,
     normalize_github_url/1,
+    normalize_module_name/1,
+    normalize_module_name/2,
     normalize_platform_name/1,
     purge_dir/1,
     run_git_command/2,
@@ -405,4 +408,73 @@ os_temp_dir() ->
             "C:/Windows/Temp";
         _ ->
             "/tmp"
+    end.
+
+-doc """
+Detect if a module name is Elixir-style (starts with literal "Elixir." prefix).
+Does not infer from capitalization.
+""".
+-spec is_elixir_module_name(atom() | string()) -> boolean().
+is_elixir_module_name(Atom) when is_atom(Atom) ->
+    is_elixir_module_name(atom_to_list(Atom));
+is_elixir_module_name(Str) when is_list(Str) ->
+    case Str of
+        "Elixir." ++ _ -> true;
+        _ -> false
+    end.
+
+-doc """
+Normalize module name. 'Elixir.GPIO' -> 'Elixir.GPIO', 'GPIO' -> 'Elixir.GPIO', 'lists' -> 'lists'.
+For Elixir modules parsed from dot syntax, use normalize_module_name/2 with ElixirFlag=true.
+""".
+-spec normalize_module_name(string() | atom() | binary()) -> binary().
+normalize_module_name(Atom) when is_atom(Atom) ->
+    normalize_module_name(atom_to_list(Atom));
+normalize_module_name(Str) when is_list(Str) ->
+    normalize_module_name(Str, false).
+
+-doc """
+Normalize module name.
+
+Use true for the second parameter when normalizing Elixir modules.
+Returns a binary().
+
+Examples:
+
+1. $ normalize_module_name(lists, false).
+    <<"lists">>
+2. $ normalize_module_name('GPIO', false).
+    <<"GPIO">>
+3. $ normalize_module_name('GPIO', true).
+    <<"Elixir.GPIO">>
+""".
+-spec normalize_module_name(
+    string() | atom() | binary(), ElixirFlag :: boolean()
+) ->
+    binary().
+normalize_module_name(Atom, ElixirFlag) when is_atom(Atom) ->
+    normalize_module_name(atom_to_list(Atom), ElixirFlag);
+normalize_module_name(Str, true) when is_list(Str) ->
+    case Str of
+        "Elixir." ++ _ ->
+            atom_from_string(Str);
+        [C | _] when C >= $A, C =< $Z ->
+            % Capitalized module name - treat as Elixir module
+            atom_from_string("Elixir." ++ Str);
+        _ ->
+            % Lowercase (Erlang module) or other - keep as-is
+            atom_from_string(Str)
+    end;
+normalize_module_name(Bin, true) when is_binary(Bin) ->
+    case Bin of
+        <<"Elixir.", _/binary>> -> Bin;
+        <<C, _/binary>> when C >= $A, C =< $Z -> <<"Elixir.", Bin/binary>>;
+        _ -> Bin
+    end;
+normalize_module_name(Str, false) when is_list(Str) ->
+    case Str of
+        "Elixir." ++ _ ->
+            atom_from_string(Str);
+        _ ->
+            atom_from_string(Str)
     end.

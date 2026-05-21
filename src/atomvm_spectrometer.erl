@@ -159,7 +159,7 @@ parse_args(["audit" | Rest]) ->
 parse_args(["ecosystem" | Rest]) ->
     case lists:any(fun(E) -> lists:member(E, ["-h", "--help"]) end, Rest) of
         false ->
-            case parse_ecosystem_args(Rest, default_eccopts()) of
+            case parse_ecosystem_args(Rest, default_eco_opts()) of
                 {error, Msg} -> {error, Msg};
                 Opts when is_map(Opts) -> {command, ecosystem, Opts}
             end;
@@ -307,8 +307,8 @@ parse_audit_args(["--min-count", N | Rest], Opts) ->
 parse_audit_args([Unknown | _], _Opts) ->
     {error, "Unknown option: " ++ Unknown}.
 
--spec default_eccopts() -> opts_map().
-default_eccopts() ->
+-spec default_eco_opts() -> opts_map().
+default_eco_opts() ->
     #{
         workers => 4,
         github => true,
@@ -359,16 +359,20 @@ parse_supported_args([], Opts) ->
     Opts;
 parse_supported_args(["--module", Mod | Rest], Opts) ->
     parse_supported_args(Rest, Opts#{
-        module => spectrometer_utils:atom_from_string(Mod)
+        module => spectrometer_utils:normalize_module_name(Mod)
     });
 parse_supported_args(["-m", Mod | Rest], Opts) ->
     parse_supported_args(Rest, Opts#{
-        module => spectrometer_utils:atom_from_string(Mod)
+        module => spectrometer_utils:normalize_module_name(Mod)
     });
 parse_supported_args(["--cache", Dir | Rest], Opts) ->
     parse_supported_args(Rest, Opts#{cache_dir => Dir});
 parse_supported_args(["-c", Dir | Rest], Opts) ->
     parse_supported_args(Rest, Opts#{cache_dir => Dir});
+parse_supported_args(["--erl" | Rest], Opts) ->
+    parse_supported_args(Rest, Opts#{filter => erlang_only});
+parse_supported_args(["--ex" | Rest], Opts) ->
+    parse_supported_args(Rest, Opts#{filter => elixir_only});
 parse_supported_args([Unknown | _], _) ->
     Reason = io_lib:format("unknown option ~s", [Unknown]),
     {error, Reason}.
@@ -410,7 +414,8 @@ parse_filter_args([MaybeFile | Rest], Opts) ->
 parse_query_args([], #{query := _Q} = Opts) ->
     Opts;
 parse_query_args([], _) ->
-    {error, "No function specified. Usage: query Module:Function[/Arity]"};
+    {error,
+        "No function specified. Usage: query Module:Function/Arity or Module.Function[/Arity]"};
 parse_query_args(["--cache", Dir | Rest], Opts) ->
     parse_query_args(Rest, Opts#{cache_dir => Dir});
 parse_query_args(["-c", Dir | Rest], Opts) ->
