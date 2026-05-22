@@ -103,7 +103,10 @@ Version =
                 {api_reference, true}
             ]}
         ]},
-        {check, [{erl_opts, [debug_info, {i, "include"}]}, {plugins, [erlfmt]}]},
+        {check, [
+            {erl_opts, [debug_info, {i, "include"}]},
+            {plugins, [erlfmt, rebar3_uncovered]}
+        ]},
         {prod, [
             {erl_opts, [debug_info, {i, "include"}, nowarn_sasl, {sasl, false}]}
         ]}

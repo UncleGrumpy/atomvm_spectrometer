@@ -6,6 +6,7 @@
 %%
 %% SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
 %% SPDX-License-Identifier: Apache-2.0
+%%
 
 -module(spectrometer_scanner_tests).
 -include_lib("eunit/include/eunit.hrl").
@@ -243,3 +244,303 @@ create_file(Dir, Name, Content) ->
 
 find_expected(Dir, Basenames) ->
     [filename:join(Dir, B) || B <- Basenames].
+
+%% =============================================================================
+%% parse_calls/1 tests - module-aware call extraction with filtering
+%% =============================================================================
+
+parse_calls_returns_module_name_test_() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_parse_calls_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    Source =
+                        "-module(myapp). -export([start/0]). "
+                        "start() -> lists:map(fun(X) -> X end, [1,2,3]), myapp:internal().\n",
+                    File = filename:join(Dir, "myapp.erl"),
+                    ok = file:write_file(File, Source),
+                    {ok, ModName, Calls} = spectrometer_scanner:parse_calls(
+                        File
+                    ),
+                    ?assertEqual(myapp, ModName),
+                    ?assert(maps:is_key({lists, map, 2}, Calls)),
+                    ?assertNot(maps:is_key({myapp, internal, 0}, Calls))
+                end)
+            end
+        ]}}.
+
+parse_calls_filters_same_module_test_() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_filter_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    Source =
+                        "-module(testmod). -export([a/0, b/0, c/0]). "
+                        "a() -> b(). b() -> c(). c() -> external:func().\n",
+                    File = filename:join(Dir, "testmod.erl"),
+                    ok = file:write_file(File, Source),
+                    {ok, _, Calls} = spectrometer_scanner:parse_calls(File),
+                    ?assertEqual(1, maps:size(Calls)),
+                    ?assert(maps:is_key({external, func, 0}, Calls))
+                end)
+            end
+        ]}}.
+
+%% =============================================================================
+%% extract_module_name/2 tests - module name extraction edge cases
+%% =============================================================================
+
+extract_module_name_non_atom_test_() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_modname_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    Source =
+                        "-module(?NonAtom). -export([foo/0]). foo() -> ok.\n",
+                    File = filename:join(Dir, "bad.erl"),
+                    ok = file:write_file(File, Source),
+                    {ok, Forms} = epp_dodger:parse_file(File),
+                    Result = spectrometer_scanner:extract_module_name(Forms),
+                    ?assertEqual(undefined, Result)
+                end)
+            end
+        ]}}.
+
+extract_module_name_multiple_attrs_test_() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_multi_modname_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    Source =
+                        "-module(first). -module(second). -export([foo/0]). foo() -> ok.\n",
+                    File = filename:join(Dir, "multi.erl"),
+                    ok = file:write_file(File, Source),
+                    {ok, Forms} = epp_dodger:parse_file(File),
+                    Result = spectrometer_scanner:extract_module_name(Forms),
+                    ?assertEqual(first, Result)
+                end)
+            end
+        ]}}.
+
+%% =============================================================================
+%% Implicit fun extraction tests - fun Module:Function/Arity syntax
+%% =============================================================================
+
+implicit_fun_extraction_test_() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_implicit_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    Source =
+                        "-module(test). -export([start/0]). "
+                        "start() -> F1 = fun lists:map/2, F2 = fun lists:filter/2, {F1, F2}.\n",
+                    File = filename:join(Dir, "implicit.erl"),
+                    ok = file:write_file(File, Source),
+                    {ok, Calls} = spectrometer_scanner:parse_file(File),
+                    ?assert(maps:is_key({lists, map, 2}, Calls)),
+                    ?assert(maps:is_key({lists, filter, 2}, Calls))
+                end)
+            end
+        ]}}.
+
+%% =============================================================================
+%% BIF detection tests - erl_internal:bif/2 attribution to erlang module
+%% =============================================================================
+
+bif_detection_test_() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_bif_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    Source =
+                        "-module(biftest). -export([test/0]). "
+                        "test() -> L = [1,2,3], Len = length(L), tuple_size({a,b}), size({a,b}).\n",
+                    File = filename:join(Dir, "biftest.erl"),
+                    ok = file:write_file(File, Source),
+                    {ok, Calls} = spectrometer_scanner:parse_file(File),
+                    ?assert(maps:is_key({erlang, length, 1}, Calls)),
+                    ?assert(maps:is_key({erlang, tuple_size, 1}, Calls)),
+                    ?assert(maps:is_key({erlang, size, 1}, Calls))
+                end)
+            end
+        ]}}.
+
+%% =============================================================================
+%% Directory skipping tests - _build, deps, .git, .rebar3 exclusion
+%% =============================================================================
+
+find_erl_files_skips_build_dir_test() ->
+    {
+        setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_skip_build_"),
+            ok = filelib:ensure_path(Dir),
+            BuildDir = filename:join(Dir, "_build"),
+            ok = file:make_dir(BuildDir),
+            create_file(BuildDir, "ignored.erl", "-module(ignored)."),
+            MainFile = create_file(Dir, "main.erl", "-module(main)."),
+            {Dir, MainFile}
+        end,
+        fun({Dir, _}) -> spectrometer_utils:purge_dir(Dir) end,
+        {with, [
+            fun({Dir, MainFile}) ->
+                ?_test(begin
+                    Result = spectrometer_scanner:find_erl_files(Dir),
+                    ?assert(length(Result) =:= 1),
+                    ?assert(lists:member(MainFile, Result))
+                end)
+            end
+        ]}
+    }.
+
+find_erl_files_skips_deps_dir_test() ->
+    {
+        setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_skip_deps_"),
+            ok = filelib:ensure_path(Dir),
+            DepsDir = filename:join(Dir, "deps"),
+            ok = file:make_dir(DepsDir),
+            create_file(DepsDir, "dep.erl", "-module(dep)."),
+            MainFile = create_file(Dir, "main.erl", "-module(main)."),
+            {Dir, MainFile}
+        end,
+        fun({Dir, _}) -> spectrometer_utils:purge_dir(Dir) end,
+        {with, [
+            fun({Dir, MainFile}) ->
+                ?_test(begin
+                    Result = spectrometer_scanner:find_erl_files(Dir),
+                    ?assert(length(Result) =:= 1),
+                    ?assert(lists:member(MainFile, Result))
+                end)
+            end
+        ]}
+    }.
+
+find_erl_files_skips_git_dir_test() ->
+    {
+        setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_skip_git_"),
+            ok = filelib:ensure_path(Dir),
+            GitDir = filename:join(Dir, ".git"),
+            ok = file:make_dir(GitDir),
+            create_file(GitDir, "packed.erl", "-module(packed)."),
+            MainFile = create_file(Dir, "main.erl", "-module(main)."),
+            {Dir, MainFile}
+        end,
+        fun({Dir, _}) -> spectrometer_utils:purge_dir(Dir) end,
+        {with, [
+            fun({Dir, MainFile}) ->
+                ?_test(begin
+                    Result = spectrometer_scanner:find_erl_files(Dir),
+                    ?assert(length(Result) =:= 1),
+                    ?assert(lists:member(MainFile, Result))
+                end)
+            end
+        ]}
+    }.
+
+find_erl_files_skips_rebar3_dir_test() ->
+    {
+        setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_skip_rebar3_"),
+            ok = filelib:ensure_path(Dir),
+            Rebar3Dir = filename:join(Dir, ".rebar3"),
+            ok = file:make_dir(Rebar3Dir),
+            create_file(Rebar3Dir, "cache.erl", "-module(cache)."),
+            MainFile = create_file(Dir, "main.erl", "-module(main)."),
+            {Dir, MainFile}
+        end,
+        fun({Dir, _}) -> spectrometer_utils:purge_dir(Dir) end,
+        {with, [
+            fun({Dir, MainFile}) ->
+                ?_test(begin
+                    Result = spectrometer_scanner:find_erl_files(Dir),
+                    ?assert(length(Result) =:= 1),
+                    ?assert(lists:member(MainFile, Result))
+                end)
+            end
+        ]}
+    }.
+
+%% =============================================================================
+%% Error recovery tests - malformed source handling
+%% =============================================================================
+
+parse_file_malformed_source_test() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_malformed_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    Source =
+                        "-module(broken). -export([foo/0]). foo() -> [unclosed_list.\n",
+                    File = filename:join(Dir, "broken.erl"),
+                    ok = file:write_file(File, Source),
+                    Result = spectrometer_scanner:parse_file(File),
+                    ?assertMatch({error, _}, Result)
+                end)
+            end
+        ]}}.
+
+parse_file_binary_garbage_test() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("scanner_binary_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    File = filename:join(Dir, "bad.erl"),
+                    ok = file:write_file(File, <<255, 254, 253>>),
+                    Result = spectrometer_scanner:parse_file(File),
+                    ?assertMatch({error, _}, Result)
+                end)
+            end
+        ]}}.
