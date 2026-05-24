@@ -41,7 +41,7 @@ reported as supported on generic_unix, see TODO.md)
 """.
 
 -export([
-    update_datafile/2
+    update/1
 ]).
 
 -include_lib("kernel/include/file.hrl").
@@ -52,6 +52,88 @@ reported as supported on generic_unix, see TODO.md)
 -type entry() :: {platforms(), since()}.
 
 -define(ALL_PLATFORMS, [emscripten, esp32, generic_unix, rp2, stm32]).
+
+-doc """
+Update the supported functions database by scanning an AtomVM repository.
+
+This is the main entry point for refreshing the database of supported OTP
+functions. It scans an AtomVM source tree, extracts function information,
+and writes a machine-readable data file.
+
+### Options
+
+The `Opts` map accepts the following keys:
+
+- `atomvm_dir` — Path to a local AtomVM repository. If provided, the existing
+  checkout is used instead of cloning a fresh copy. The directory is not deleted
+  after scanning.
+- `branch` — Git branch to use when cloning (default: `"main"`). Ignored if
+  `atomvm_dir` is provided.
+- `cache_dir` — Directory path for cached data. Sets the `spectrometer`
+  application environment.
+- `force` — `true` to overwrite an existing output file. Without this flag,
+  the function errors if the output file already exists.
+- `output` — Path for the output data file (default: user database path from
+  `spectrometer_utils:user_db_file/0`).
+- `tag` — Git tag to check out when cloning (e.g., `"v0.7.0"`). Tags take
+  precedence over `branch`.
+- `tests` — `false` to skip scanning test files for external function calls
+  (default: `true`).
+
+### Returns
+
+- `ok` on success
+- `{error, Reason}` if the output file exists (without `force`), the output
+  cannot be written, or the repository cannot be cloned
+
+### Examples
+
+```erlang
+%% Update from main branch (clones temp repo)
+ok = spectrometer_updater:update(#{branch => "main"}).
+
+%% Update from local checkout with force
+ok = spectrometer_updater:update(#{atomvm_dir => "/path/to/atomvm", force => true}).
+
+%% Update specific tag without scanning tests
+ok = spectrometer_updater:update(#{tag => "v0.7.0", tests => false}).
+```
+""".
+-spec update(Opts :: map()) -> ok | {error, term()}.
+update(Opts) ->
+    case Opts of
+        #{cache_dir := CacheDir} ->
+            application:set_env(spectrometer, cache_dir, CacheDir);
+        #{} ->
+            ok
+    end,
+    OutputFile =
+        case Opts of
+            #{output := File} ->
+                File;
+            #{} ->
+                spectrometer_utils:user_db_file()
+        end,
+    Force = maps:get(force, Opts, false),
+
+    case filelib:is_file(OutputFile) andalso not Force of
+        true ->
+            io:format("Output file already exists: ~s\n", [OutputFile]),
+            io:format("Use --force to overwrite.\n"),
+            {error, {file_exists, OutputFile}};
+        _ ->
+            case update_datafile(Opts, OutputFile) of
+                ok ->
+                    ok;
+                {error, Reason} ->
+                    io:format(
+                        standard_error, "Error: unable to update data, ~p\n", [
+                            Reason
+                        ]
+                    ),
+                    {error, Reason}
+            end
+    end.
 
 -spec build_db_from_list([{atom(), term()}]) -> map().
 build_db_from_list(Data) ->

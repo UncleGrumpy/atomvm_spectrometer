@@ -61,7 +61,7 @@ main(Args) ->
             spectrometer_help:usage(Cmd),
             maybe_halt(0);
         {command, audit, Opts} ->
-            case run_analyzer_dispatch(Opts, fun run_audit/1) of
+            case spectrometer_analyzer:audit(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -69,7 +69,7 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, ecosystem, Opts} ->
-            case run_ecosystem(Opts) of
+            case spectrometer_ecosystem:run(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -77,7 +77,7 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, examine, Opts} ->
-            case run_analyzer_dispatch(Opts, fun run_examine/1) of
+            case spectrometer_analyzer:examine(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -85,12 +85,12 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, supported, Opts} ->
-            case run_supported(Opts) of
+            case spectrometer_atomvm:report_supported(Opts) of
                 ok -> maybe_halt(0);
                 {error, _} -> maybe_halt(1)
             end;
         {command, filter, Opts} ->
-            case run_filter(Opts) of
+            case spectrometer_analyzer:filter(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -98,12 +98,12 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, update, Opts} ->
-            case run_update(Opts) of
+            case spectrometer_updater:update(Opts) of
                 ok -> maybe_halt(0);
                 {error, _} -> maybe_halt(1)
             end;
         {command, query, Opts} ->
-            case run_query(Opts) of
+            case spectrometer_atomvm:query(Opts) of
                 ok -> maybe_halt(0);
                 {error, _} -> maybe_halt(1)
             end
@@ -450,78 +450,3 @@ parse_update_args(["--force" | Rest], Opts) ->
     parse_update_args(Rest, Opts#{force => true});
 parse_update_args([Unknown | _], _Opts) ->
     {error, "Unknown option: " ++ Unknown}.
-
--doc false.
-run_audit(Opts) ->
-    spectrometer_analyzer:audit(Opts).
-
--doc false.
-run_analyzer_dispatch(Opts, Runner) ->
-    case spectrometer_utils:start_applications() of
-        ok ->
-            Runner(Opts);
-        {error, Reason} ->
-            io:format("Failed to start required applications... "),
-            {error, Reason}
-    end.
-
--doc false.
--spec run_ecosystem(opts_map()) -> ok | {error, term()}.
-run_ecosystem(Opts) ->
-    spectrometer_ecosystem:run(Opts).
-
--doc false.
-run_examine(Opts) ->
-    spectrometer_analyzer:examine(Opts).
-
--doc false.
--spec run_supported(opts_map()) -> ok | {error, unsupported}.
-run_supported(Opts) ->
-    spectrometer_atomvm:report_supported(Opts).
-
--doc false.
--spec run_filter(opts_map()) -> ok | {error, term()}.
-run_filter(Opts) ->
-    spectrometer_analyzer:filter(Opts).
-
--doc false.
--spec run_query(opts_map()) -> ok | {error, term()}.
-run_query(Opts) ->
-    spectrometer_atomvm:query(Opts).
-
--doc false.
--spec run_update(opts_map()) -> ok | {error, term()}.
-run_update(Opts) ->
-    case Opts of
-        #{cache_dir := CacheDir} ->
-            application:set_env(spectrometer, cache_dir, CacheDir);
-        #{} ->
-            ok
-    end,
-    OutputFile =
-        case Opts of
-            #{output := File} ->
-                File;
-            #{} ->
-                spectrometer_utils:user_db_file()
-        end,
-    Force = maps:get(force, Opts, false),
-
-    case filelib:is_file(OutputFile) andalso not Force of
-        true ->
-            io:format("Output file already exists: ~s\n", [OutputFile]),
-            io:format("Use --force to overwrite.\n"),
-            {error, {file_exists, OutputFile}};
-        _ ->
-            case spectrometer_updater:update_datafile(Opts, OutputFile) of
-                ok ->
-                    ok;
-                {error, Reason} ->
-                    io:format(
-                        standard_error, "Error: unable to update data, ~p\n", [
-                            Reason
-                        ]
-                    ),
-                    {error, Reason}
-            end
-    end.
