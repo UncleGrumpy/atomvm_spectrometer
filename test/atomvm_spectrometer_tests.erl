@@ -455,6 +455,22 @@ parse_supported_args_short_module_test_() ->
         ?assertEqual(maps, maps:get(module, Opts))
     end}.
 
+parse_supported_args_erl_test_() ->
+    {"parses --erl flag", fun() ->
+        {command, supported, Opts} = atomvm_spectrometer:parse_args(
+            ["supported", "--erl"]
+        ),
+        ?assertEqual(erlang_only, maps:get(filter, Opts))
+    end}.
+
+parse_supported_args_ex_test_() ->
+    {"parses --ex flag", fun() ->
+        {command, supported, Opts} = atomvm_spectrometer:parse_args(
+            ["supported", "--ex"]
+        ),
+        ?assertEqual(elixir_only, maps:get(filter, Opts))
+    end}.
+
 %% =============================================================================
 %% parse_filter_args/2 tests
 %% =============================================================================
@@ -504,12 +520,37 @@ parse_filter_args_multiple_csv_test_() ->
 parse_filter_args_invalid_min_repos_test_() ->
     {"returns error for invalid --min-repos", fun() ->
         {error, Msg} = atomvm_spectrometer:parse_args([
-            "filter", "results.csv", "--min-repos", "abc"
-        ]),
-        ?assert(string:str(Msg, "Invalid") > 0)
+        )
     end}.
 
-parse_filter_args_flag_as_file_test_() ->
+parse_supported_args_capitalized_module_no_prefix_test_() ->
+    {"parses -m with capitalized module name without Elixir prefix stays as-is", fun() ->
+        % normalize_module_name/1 (ElixirFlag=false) does NOT add Elixir prefix
+        % "List" -> 'List', not 'Elixir.List'
+        {command, supported, Opts} = atomvm_spectrometer:parse_args(
+            ["supported", "-m", "List"]
+        ),
+        ?assertEqual('List', maps:get(module, Opts))
+    end}.
+
+parse_supported_args_erlang_module_test_() ->
+    {"parses --module with lowercase erlang module name", fun() ->
+        {command, supported, Opts} = atomvm_spectrometer:parse_args(
+            ["supported", "--module", "gen_server"]
+        ),
+        ?assertEqual(gen_server, maps:get(module, Opts))
+    end}.
+
+parse_supported_args_unknown_flag_test_() ->
+    {"returns error for unknown flag in supported args", fun() ->
+        {error, _Msg} = atomvm_spectrometer:parse_args(
+            ["supported", "--unknown-flag"]
+        )
+    end}.
+
+%% =============================================================================
+%% parse_filter_args/2 tests
+%% =============================================================================
     {"returns error for flag-shaped option where csv_file expected", fun() ->
         {error, Msg} = atomvm_spectrometer:parse_args([
             "filter", "--unknown-flag"
@@ -661,16 +702,16 @@ parse_query_string_zero_arity_test_() ->
         )
     end}.
 
-parse_query_string_unknown_module_test_() ->
-    {"returns ok for non-existent module", fun() ->
+parse_query_string_without_arity_test_() ->
+    {"returns ok for module query without arity", fun() ->
         ?assertEqual(
-            {ok, nonexistent_module_xyz, foo},
-            spectrometer_atomvm:parse_query_string("nonexistent_module_xyz:foo")
+            {ok, module_xyz, foo},
+            spectrometer_atomvm:parse_query_string("module_xyz:foo")
         )
     end}.
 
-parse_query_string_missing_colon_test_() ->
-    {"returns error for missing colon", fun() ->
+parse_invalid_query_string_test_() ->
+    {"returns error for invalid query string", fun() ->
         {error, _} = spectrometer_atomvm:parse_query_string("foobar"),
         {error, Msg1} = spectrometer_atomvm:parse_query_string("foobar"),
         ?assert(string:str(Msg1, "Invalid format") > 0)
@@ -680,6 +721,32 @@ parse_query_string_invalid_arity_test_() ->
     {"returns error for invalid arity", fun() ->
         {error, Msg} = spectrometer_atomvm:parse_query_string("foo:bar/abc"),
         ?assert(string:str(Msg, "Invalid arity") > 0)
+    end}.
+
+parse_query_string_elixir_formats_test_() ->
+    {"parse Elixir query formats for Elixir.GPIO:digital_read", fun() ->
+        FormatsWithArity = [
+            {"Elixir.GPIO.digital_read/1",
+                {ok, 'Elixir.GPIO', digital_read, 1}},
+            {"GPIO.digital_read/1", {ok, 'Elixir.GPIO', digital_read, 1}},
+            {"Elixir.GPIO:digital_read/1",
+                {ok, 'Elixir.GPIO', digital_read, 1}},
+            {"GPIO:digital_read/1", {ok, 'Elixir.GPIO', digital_read, 1}}
+        ],
+        FormatsNoArity = [
+            {"Elixir.GPIO.digital_read", {ok, 'Elixir.GPIO', digital_read}},
+            {"Elixir.GPIO:digital_read", {ok, 'Elixir.GPIO', digital_read}},
+            {"GPIO.digital_read", {ok, 'Elixir.GPIO', digital_read}},
+            {"GPIO:digital_read", {ok, 'Elixir.GPIO', digital_read}}
+        ],
+        lists:foreach(
+            fun({Format, Expected}) ->
+                ?assertEqual(
+                    Expected, spectrometer_atomvm:parse_query_string(Format)
+                )
+            end,
+            FormatsWithArity ++ FormatsNoArity
+        )
     end}.
 
 %% =============================================================================
