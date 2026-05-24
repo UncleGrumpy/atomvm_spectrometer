@@ -580,3 +580,682 @@ scan_via_ast_test_() ->
             end
         ]}
     }.
+
+%% =============================================================================
+%% normalize_tag/1 tests
+%% =============================================================================
+
+normalize_tag_strips_prerelease_test_() ->
+    {"strips prerelease suffixes from tags", fun() ->
+        ?assertEqual(
+            <<"v0.5.0">>,
+            spectrometer_updater:normalize_tag("v0.5.0-alpha.1")
+        ),
+        ?assertEqual(
+            <<"v0.6.0">>,
+            spectrometer_updater:normalize_tag("v0.6.0-rc.2")
+        ),
+        ?assertEqual(
+            <<"v1.0.0">>,
+            spectrometer_updater:normalize_tag("v1.0.0-beta.3")
+        ),
+        ?assertEqual(
+            <<"v0.5.0">>,
+            spectrometer_updater:normalize_tag("v0.5.0")
+        )
+    end}.
+
+%% =============================================================================
+%% branch_sort_key/1 tests
+%% =============================================================================
+
+branch_sort_key_main_test_() ->
+    {"main branch is newest (tier 3)", fun() ->
+        ?assertEqual(
+            {3, <<>>}, spectrometer_updater:branch_sort_key(<<"main">>)
+        )
+    end}.
+
+branch_sort_key_release_test_() ->
+    {"release branches are tier 2", fun() ->
+        ?assertEqual(
+            {2, {0, 7}},
+            spectrometer_updater:branch_sort_key(<<"release-0.7">>)
+        ),
+        ?assertEqual(
+            {2, {1, 2}},
+            spectrometer_updater:branch_sort_key(<<"release-1.2">>)
+        )
+    end}.
+
+branch_sort_key_versioned_test_() ->
+    {"versioned branches like 0.7.x are tier 2", fun() ->
+        ?assertEqual(
+            {2, {0, 7}},
+            spectrometer_updater:branch_sort_key(<<"0.7.x">>)
+        ),
+        ?assertEqual(
+            {2, {1, 0}},
+            spectrometer_updater:branch_sort_key(<<"1.0.x">>)
+        )
+    end}.
+
+branch_sort_key_unknown_test_() ->
+    {"unknown branches are tier 1", fun() ->
+        ?assertEqual(
+            {1, <<"feature-x">>},
+            spectrometer_updater:branch_sort_key(<<"feature-x">>)
+        ),
+        ?assertEqual(
+            {1, <<"custom">>},
+            spectrometer_updater:branch_sort_key(<<"custom">>)
+        )
+    end}.
+
+%% =============================================================================
+%% parse_semver/1 tests
+%% =============================================================================
+
+parse_semver_valid_test_() ->
+    {"parses valid semantic versions", fun() ->
+        ?assertEqual(
+            {ok, {1, 2, 3}}, spectrometer_updater:parse_semver("v1.2.3")
+        ),
+        ?assertEqual(
+            {ok, {0, 5, 0}}, spectrometer_updater:parse_semver("v0.5.0")
+        ),
+        ?assertEqual(
+            {ok, {1, 2, 3}}, spectrometer_updater:parse_semver("1.2.3")
+        ),
+        ?assertEqual(
+            {ok, {0, 5, 0}}, spectrometer_updater:parse_semver("0.5.0")
+        )
+    end}.
+
+parse_semver_prerelease_test_() ->
+    {"strips prerelease suffix for comparison", fun() ->
+        ?assertEqual(
+            {ok, {0, 5, 0}},
+            spectrometer_updater:parse_semver("v0.5.0-alpha.1")
+        ),
+        ?assertEqual(
+            {ok, {0, 6, 0}},
+            spectrometer_updater:parse_semver("v0.6.0-rc.2")
+        )
+    end}.
+
+parse_semver_partial_test_() ->
+    {"handles partial versions", fun() ->
+        ?assertEqual(
+            {ok, {1, 2, 0}}, spectrometer_updater:parse_semver("v1.2")
+        ),
+        ?assertEqual({ok, {1, 0, 0}}, spectrometer_updater:parse_semver("v1")),
+        ?assertEqual({ok, {0, 5, 0}}, spectrometer_updater:parse_semver("0.5"))
+    end}.
+
+parse_semver_invalid_test_() ->
+    {"returns error for invalid versions", fun() ->
+        ?assertEqual(
+            {error, non_integer_version},
+            spectrometer_updater:parse_semver("notaversion")
+        ),
+        ?assertEqual(
+            {error, non_integer_version},
+            spectrometer_updater:parse_semver("vabc.def.ghi")
+        )
+    end}.
+
+%% =============================================================================
+%% compare_semver/2 tests
+%% =============================================================================
+
+compare_semver_ordering_test_() ->
+    {"compares semantic version ordering", fun() ->
+        ?assertEqual(
+            older,
+            spectrometer_updater:compare_semver(<<"v0.4.0">>, <<"v0.5.0">>)
+        ),
+        ?assertEqual(
+            newer,
+            spectrometer_updater:compare_semver(<<"v0.6.0">>, <<"v0.5.0">>)
+        ),
+        ?assertEqual(
+            same,
+            spectrometer_updater:compare_semver(<<"v0.5.0">>, <<"v0.5.0">>)
+        )
+    end}.
+
+compare_semver_patch_test_() ->
+    {"compares patch versions", fun() ->
+        ?assertEqual(
+            older,
+            spectrometer_updater:compare_semver(<<"v0.5.0">>, <<"v0.5.1">>)
+        ),
+        ?assertEqual(
+            newer,
+            spectrometer_updater:compare_semver(<<"v0.5.2">>, <<"v0.5.1">>)
+        )
+    end}.
+
+%% =============================================================================
+%% merge_platforms_all/2 tests
+%% =============================================================================
+
+merge_platforms_all_both_all_test_() ->
+    {"all + all = all", fun() ->
+        ?assertEqual(all, spectrometer_updater:merge_platforms_all(all, all))
+    end}.
+
+merge_platforms_all_all_with_list_test_() ->
+    {"all + list = all", fun() ->
+        ?assertEqual(
+            all, spectrometer_updater:merge_platforms_all(all, [esp32])
+        ),
+        ?assertEqual(
+            all, spectrometer_updater:merge_platforms_all([esp32], all)
+        )
+    end}.
+
+merge_platforms_all_two_lists_test_() ->
+    {"merges two platform lists", fun() ->
+        ?assertEqual(
+            [esp32, rp2],
+            spectrometer_updater:merge_platforms_all([esp32], [rp2])
+        ),
+        ?assertEqual(
+            [esp32, rp2],
+            spectrometer_updater:merge_platforms_all([rp2], [esp32])
+        )
+    end}.
+
+merge_platforms_all_all_platforms_test_() ->
+    {"all platforms combined become 'all'", fun() ->
+        AllPlatforms = [emscripten, esp32, generic_unix, rp2, stm32],
+        ?assertEqual(
+            all,
+            spectrometer_updater:merge_platforms_all(AllPlatforms, [])
+        )
+    end}.
+
+%% =============================================================================
+%% merge_platforms/2 tests
+%% =============================================================================
+
+merge_platforms_all_case_test_() ->
+    {"all + platform = all", fun() ->
+        ?assertEqual(all, spectrometer_updater:merge_platforms(all, esp32)),
+        ?assertEqual(all, spectrometer_updater:merge_platforms(all, stm32))
+    end}.
+
+merge_platforms_new_platform_test_() ->
+    {"adds new platform to list", fun() ->
+        ?assertEqual(
+            [esp32, rp2],
+            spectrometer_updater:merge_platforms([esp32], rp2)
+        )
+    end}.
+
+merge_platforms_duplicate_test_() ->
+    {"duplicate platform not added", fun() ->
+        ?assertEqual(
+            [esp32],
+            spectrometer_updater:merge_platforms([esp32], esp32)
+        )
+    end}.
+
+merge_platforms_all_platforms_test_() ->
+    {"all five platforms combined become 'all'", fun() ->
+        ?assertEqual(
+            all,
+            spectrometer_updater:merge_platforms(
+                [emscripten, esp32, rp2, stm32], generic_unix
+            )
+        )
+    end}.
+
+%% =============================================================================
+%% is_digit_binary/1 tests
+%% =============================================================================
+
+is_digit_binary_valid_test_() ->
+    {"returns true for digit-only binaries", fun() ->
+        ?assert(spectrometer_updater:is_digit_binary(<<"123">>)),
+        ?assert(spectrometer_updater:is_digit_binary(<<"0">>)),
+        ?assert(spectrometer_updater:is_digit_binary(<<"999999">>))
+    end}.
+
+is_digit_binary_invalid_test_() ->
+    {"returns false for non-digit binaries", fun() ->
+        ?assertNot(spectrometer_updater:is_digit_binary(<<"abc">>)),
+        ?assertNot(spectrometer_updater:is_digit_binary(<<"12a3">>)),
+        ?assertNot(spectrometer_updater:is_digit_binary(<<>>))
+    end}.
+
+%% =============================================================================
+%% build_db_from_list/1 tests
+%% =============================================================================
+
+build_db_from_list_test_() ->
+    {"builds database map from list of entries", fun() ->
+        Data = [
+            {my_module, [
+                {func1, 1, all, {unreleased, <<"main">>}},
+                {func2, 2, [esp32], {unreleased, <<"main">>}}
+            ]}
+        ],
+        DB = spectrometer_updater:build_db_from_list(Data),
+        ?assertEqual(
+            {all, {unreleased, <<"main">>}},
+            maps:get({my_module, func1, 1}, DB)
+        ),
+        ?assertEqual(
+            {[esp32], {unreleased, <<"main">>}},
+            maps:get({my_module, func2, 2}, DB)
+        )
+    end}.
+
+%% =============================================================================
+%% find_first_match/2,3 tests
+%% =============================================================================
+
+find_first_match_found_test_() ->
+    {"finds first matching line", fun() ->
+        Lines = [
+            "% Some comment",
+            "-module(test_mod).",
+            "-export([test/0])."
+        ],
+        ?assertEqual(
+            test_mod,
+            spectrometer_updater:find_first_match(
+                "-module\\s*\\(\\s*([a-z_][a-z0-9_]*)\\s*\\)\\s*\\.", Lines
+            )
+        )
+    end}.
+
+find_first_match_not_found_test_() ->
+    {"returns undefined when no match", fun() ->
+        Lines = ["something else", "-export([test/0])."],
+        ?assertEqual(
+            undefined,
+            spectrometer_updater:find_first_match(
+                "-module\\s*\\(\\s*([a-z_][a-z0-9_]*)\\s*\\)\\s*\\.", Lines
+            )
+        )
+    end}.
+
+%% =============================================================================
+%% find_exports/1 tests
+%% =============================================================================
+
+find_exports_single_test_() ->
+    {"finds exports from single-line -export", fun() ->
+        Lines = ["-export([func/1, other/2])."],
+        ?assertEqual(
+            [{func, 1}, {other, 2}],
+            lists:sort(spectrometer_updater:find_exports(Lines))
+        )
+    end}.
+
+find_exports_multiline_test_() ->
+    {"finds exports from multi-line -export", fun() ->
+        Lines = [
+            "-export([",
+            "    func1/1,",
+            "    func2/2",
+            "])."
+        ],
+        ?assertEqual(
+            [{func1, 1}, {func2, 2}],
+            lists:sort(spectrometer_updater:find_exports(Lines))
+        )
+    end}.
+
+find_exports_none_test_() ->
+    {"returns empty for no exports", fun() ->
+        ?assertEqual([], spectrometer_updater:find_exports(["-module(test)."])),
+        ?assertEqual([], spectrometer_updater:find_exports([]))
+    end}.
+
+%% =============================================================================
+%% parse_export_list/1 tests
+%% =============================================================================
+
+parse_export_list_basic_test_() ->
+    {"parses basic export list", fun() ->
+        ?assertEqual(
+            [{bar, 2}, {foo, 1}],
+            lists:sort(spectrometer_updater:parse_export_list("[foo/1,bar/2]"))
+        )
+    end}.
+
+parse_export_list_with_spaces_test_() ->
+    {"handles spaces around commas", fun() ->
+        ?assertEqual(
+            [{bar, 2}, {foo, 1}],
+            lists:sort(spectrometer_updater:parse_export_list("foo/1 , bar/2"))
+        )
+    end}.
+
+%% =============================================================================
+%% find_erl_files/2 tests
+%% =============================================================================
+
+find_erl_files_test_() ->
+    {"finds .erl files recursively",
+        {setup,
+            fun() ->
+                Dir = spectrometer_utils:make_temp_dir("erl_files_test_"),
+                ok = filelib:ensure_path(filename:join(Dir, "subdir")),
+                ok = file:write_file(filename:join(Dir, "a.erl"), ""),
+                ok = file:write_file(
+                    filename:join(filename:join(Dir, "subdir"), "b.erl"), ""
+                ),
+                ok = file:write_file(filename:join(Dir, "skip.txt"), ""),
+                Dir
+            end,
+            fun(Dir) -> spectrometer_utils:purge_dir(Dir) end, fun(
+                Dir
+            ) ->
+                ?_test(begin
+                    Files = spectrometer_updater:find_erl_files(Dir),
+                    ?assertEqual(2, length(Files)),
+                    Names = lists:sort([filename:basename(F) || F <- Files]),
+                    ?assertEqual(["a.erl", "b.erl"], Names)
+                end)
+            end}}.
+
+%% =============================================================================
+%% count_arity/1 tests
+%% =============================================================================
+
+count_arity_test_() ->
+    {"counts function arity from argument string", fun() ->
+        ?assertEqual(0, spectrometer_updater:count_arity("")),
+        ?assertEqual(1, spectrometer_updater:count_arity("x")),
+        ?assertEqual(2, spectrometer_updater:count_arity("x, y")),
+        ?assertEqual(3, spectrometer_updater:count_arity("x, y, z")),
+        ?assertEqual(2, spectrometer_updater:count_arity("  x  ,  y  "))
+    end}.
+
+count_arity_nested_parens_test_() ->
+    {"counts arity ignoring commas inside parentheses", fun() ->
+        %% "f(a, b), c" has top-level comma between the tuple and c -> arity 2
+        ?assertEqual(2, spectrometer_updater:count_arity("f(a, b), c")),
+        %% "[a, b], c" -> top-level comma between list and c -> arity 2
+        ?assertEqual(2, spectrometer_updater:count_arity("[a, b], c")),
+        %% "{a, b, c}" -> no top-level commas -> arity 1
+        ?assertEqual(1, spectrometer_updater:count_arity("{a, b, c}"))
+    end}.
+
+count_arity_whitespace_only_test_() ->
+    {"treats whitespace-only args as arity 0", fun() ->
+        ?assertEqual(0, spectrometer_updater:count_arity("   "))
+    end}.
+
+%% =============================================================================
+%% find_elixir_module_def/1 tests
+%% =============================================================================
+
+find_elixir_module_def_defmodule_test_() ->
+    {"detects defmodule declarations", fun() ->
+        ?assertEqual(
+            {defmodule, "MyModule"},
+            spectrometer_updater:find_elixir_module_def("defmodule MyModule do")
+        ),
+        ?assertEqual(
+            {defmodule, "GPIO.Driver"},
+            spectrometer_updater:find_elixir_module_def(
+                "  defmodule GPIO.Driver do"
+            )
+        )
+    end}.
+
+find_elixir_module_def_defimpl_test_() ->
+    {"detects defimpl declarations", fun() ->
+        ?assertEqual(
+            {defimpl, "SomeProtocol", "SomeModule"},
+            spectrometer_updater:find_elixir_module_def(
+                "defimpl SomeProtocol, for: SomeModule do"
+            )
+        ),
+        ?assertEqual(
+            {defimpl, "SomeProtocol"},
+            spectrometer_updater:find_elixir_module_def(
+                "defimpl SomeProtocol do"
+            )
+        )
+    end}.
+
+find_elixir_module_def_defimpl_for_test_() ->
+    {"detects defimpl for keyword", fun() ->
+        ?assertEqual(
+            {defimpl, "Enumerable", "List"},
+            spectrometer_updater:find_elixir_module_def(
+                "defimpl Enumerable, for: List do"
+            )
+        )
+    end}.
+
+find_elixir_module_def_end_test_() ->
+    {"detects end keyword", fun() ->
+        ?assertEqual(
+            {end_block}, spectrometer_updater:find_elixir_module_def("end")
+        ),
+        ?assertEqual(
+            {end_block}, spectrometer_updater:find_elixir_module_def("  end  ")
+        )
+    end}.
+
+find_elixir_module_def_none_test_() ->
+    {"returns error for non-matching lines", fun() ->
+        ?assertEqual(
+            error, spectrometer_updater:find_elixir_module_def("some code")
+        ),
+        ?assertEqual(
+            error, spectrometer_updater:find_elixir_module_def("def foo() do")
+        )
+    end}.
+
+%% =============================================================================
+%% find_elixir_def/1 tests
+%% =============================================================================
+
+find_elixir_def_public_test_() ->
+    {"detects public def functions", fun() ->
+        ?assertEqual(
+            {ok, "my_func", "x, y"},
+            spectrometer_updater:find_elixir_def("  def my_func(x, y) do")
+        ),
+        ?assertEqual(
+            {ok, "valid?", "x"},
+            spectrometer_updater:find_elixir_def("def valid?(x) do")
+        ),
+        ?assertEqual(
+            {ok, "risky!", "x"},
+            spectrometer_updater:find_elixir_def("def risky!(x) do")
+        )
+    end}.
+
+find_elixir_def_private_test_() ->
+    {"skips defp private functions", fun() ->
+        ?assertEqual(
+            skip,
+            spectrometer_updater:find_elixir_def("defp private_func(x) do")
+        ),
+        ?assertEqual(
+            skip, spectrometer_updater:find_elixir_def("  defp hidden() do")
+        )
+    end}.
+
+find_elixir_def_none_test_() ->
+    {"returns skip for non-def lines", fun() ->
+        ?assertEqual(
+            skip, spectrometer_updater:find_elixir_def("some other code")
+        ),
+        ?assertEqual(
+            skip, spectrometer_updater:find_elixir_def("defmodule Test do")
+        )
+    end}.
+
+%% =============================================================================
+%% extract_function_from_line/1 tests
+%% =============================================================================
+
+extract_function_from_line_basic_test_() ->
+    {"extracts function name and args", fun() ->
+        ?assertEqual(
+            {ok, "func", "x, y"},
+            spectrometer_updater:extract_function_from_line(
+                "  def func(x, y) do"
+            )
+        ),
+        ?assertEqual(
+            {ok, "check?", "x"},
+            spectrometer_updater:extract_function_from_line("def check?(x) do")
+        )
+    end}.
+
+extract_function_from_line_no_parens_test_() ->
+    {"handles function with empty args", fun() ->
+        ?assertEqual(
+            {ok, "noargs", ""},
+            spectrometer_updater:extract_function_from_line("def noargs() do")
+        )
+    end}.
+
+extract_function_from_line_error_test_() ->
+    {"returns error for malformed lines", fun() ->
+        ?assertEqual(
+            skip, spectrometer_updater:extract_function_from_line("def")
+        )
+    end}.
+
+%% =============================================================================
+%% find_elixir_exports/1 tests
+%% =============================================================================
+
+find_elixir_exports_test_() ->
+    {"extracts exports from elixir source lines", fun() ->
+        Lines = [
+            "defmodule TestModule do",
+            "  def public(x) do",
+            "    x",
+            "  end",
+            "  defp private(x) do",
+            "    x",
+            "  end",
+            "  def with_qmark?(x) do",
+            "    x",
+            "  end",
+            "  def bang!() do",
+            "    :ok",
+            "  end",
+            "end"
+        ],
+        Exports = spectrometer_updater:find_elixir_exports(Lines),
+        Expected = [
+            {'Elixir.TestModule', 'bang!', 0},
+            {'Elixir.TestModule', public, 1},
+            {'Elixir.TestModule', 'with_qmark?', 1}
+        ],
+        ?assertEqual(Expected, lists:sort(Exports))
+    end}.
+
+find_elixir_exports_defimpl_test_() ->
+    {"extracts exports from defimpl blocks", fun() ->
+        Lines = [
+            "defimpl Enumerable, for: List do",
+            "  def count(list) do",
+            "    {:ok, length(list)}",
+            "  end",
+            "  def member?(list, x) do",
+            "    {:ok, :lists.member(x, list)}",
+            "  end",
+            "  defp private_helper(x) do",
+            "    x",
+            "  end",
+            "end"
+        ],
+        Exports = spectrometer_updater:find_elixir_exports(Lines),
+        ModuleAtom = 'Elixir.Enumerable.List',
+        ?assert(lists:member({ModuleAtom, count, 1}, Exports)),
+        ?assert(lists:member({ModuleAtom, 'member?', 2}, Exports)),
+        ?assertNot(lists:member({ModuleAtom, private_helper, 1}, Exports))
+    end}.
+
+find_elixir_exports_nested_modules_test_() ->
+    {"handles nested defmodule correctly", fun() ->
+        Lines = [
+            "defmodule Outer do",
+            "  def outer_func(x) do",
+            "    x",
+            "  end",
+            "  defmodule Inner do",
+            "    def inner_func(x, y) do",
+            "      x + y",
+            "    end",
+            "  end",
+            "end"
+        ],
+        Exports = spectrometer_updater:find_elixir_exports(Lines),
+        ?assert(lists:member({'Elixir.Outer', outer_func, 1}, Exports)),
+        ?assert(lists:member({'Elixir.Inner', inner_func, 2}, Exports))
+    end}.
+
+find_elixir_exports_empty_module_test_() ->
+    {"handles empty module (no defs)", fun() ->
+        Lines = [
+            "defmodule Empty do",
+            "end"
+        ],
+        Exports = spectrometer_updater:find_elixir_exports(Lines),
+        ?assertEqual([], Exports)
+    end}.
+
+scan_exavmlib_dir_test_() ->
+    {"scans exavmlib directory for .ex files",
+        {setup,
+            fun() ->
+                Dir = spectrometer_utils:make_temp_dir("exavmlib_test_"),
+                ExDir = filename:join(Dir, "exavmlib"),
+                ok = filelib:ensure_path(filename:join(ExDir, "sub")),
+                ExContent = <<
+                    "defmodule MyModule do\n",
+                    "  def public_func(x) do\n",
+                    "    x\n",
+                    "  end\n",
+                    "  defp private_func(x) do\n",
+                    "    x\n",
+                    "  end\n",
+                    "end\n",
+                    "\n",
+                    "defmodule OtherMod do\n",
+                    "  def another() do\n",
+                    "    :ok\n",
+                    "  end\n",
+                    "end\n"
+                >>,
+                ok = file:write_file(
+                    filename:join(ExDir, "my_module.ex"), ExContent
+                ),
+                Dir
+            end,
+            fun(Dir) -> fun() -> spectrometer_utils:purge_dir(Dir) end end, fun(
+                Dir
+            ) ->
+                ?_test(begin
+                    ExDir = filename:join(Dir, "exavmlib"),
+                    Acc = spectrometer_updater:scan_exavmlib_dir(
+                        ExDir, #{}, all, {unreleased, <<"main">>}
+                    ),
+                    ?assert(is_map(Acc)),
+                    ?assert(
+                        maps:is_key({'Elixir.MyModule', public_func, 1}, Acc)
+                    ),
+                    ?assert(maps:is_key({'Elixir.OtherMod', another, 0}, Acc)),
+                    ?assertNot(
+                        maps:is_key({'Elixir.MyModule', private_func, 1}, Acc)
+                    )
+                end)
+            end}}.
