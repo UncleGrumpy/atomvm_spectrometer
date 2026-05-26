@@ -17,16 +17,18 @@
 
 parse_query_8_formats_test() ->
     FormatsWithArity = [
-        {"Elixir.GPIO.digital_read/1", {ok, 'Elixir.GPIO', digital_read, 1}},
-        {"GPIO.digital_read/1", {ok, 'Elixir.GPIO', digital_read, 1}},
-        {"Elixir.GPIO:digital_read/1", {ok, 'GPIO', digital_read, 1}},
-        {"GPIO:digital_read/1", {ok, 'GPIO', digital_read, 1}}
+        {"Elixir.GPIO.digital_read/1",
+            {ok, <<"Elixir.GPIO">>, <<"digital_read">>, 1}},
+        {"GPIO.digital_read/1", {ok, <<"Elixir.GPIO">>, <<"digital_read">>, 1}},
+        {"Elixir.GPIO:digital_read/1", {ok, <<"GPIO">>, <<"digital_read">>, 1}},
+        {"GPIO:digital_read/1", {ok, <<"GPIO">>, <<"digital_read">>, 1}}
     ],
     FormatsNoArity = [
-        {"Elixir.GPIO.digital_read", {ok, 'Elixir.GPIO', digital_read}},
-        {"GPIO.digital_read", {ok, 'Elixir.GPIO', digital_read}},
-        {"Elixir.GPIO:digital_read", {ok, 'GPIO', digital_read}},
-        {"GPIO:digital_read", {ok, 'GPIO', digital_read}}
+        {"Elixir.GPIO.digital_read",
+            {ok, <<"Elixir.GPIO">>, <<"digital_read">>}},
+        {"GPIO.digital_read", {ok, <<"Elixir.GPIO">>, <<"digital_read">>}},
+        {"Elixir.GPIO:digital_read", {ok, <<"GPIO">>, <<"digital_read">>}},
+        {"GPIO:digital_read", {ok, <<"GPIO">>, <<"digital_read">>}}
     ],
     lists:foreach(
         fun({Format, Expected}) ->
@@ -42,29 +44,29 @@ parse_query_8_formats_test() ->
 
 normalize_gpio_test() ->
     ?assertEqual(
-        'GPIO',
+        <<"GPIO">>,
         spectrometer_utils:normalize_module_name("GPIO")
     ).
 
 normalize_elixir_gpio_test() ->
     ?assertEqual(
-        'Elixir.GPIO',
+        <<"Elixir.GPIO">>,
         spectrometer_utils:normalize_module_name("Elixir.GPIO")
     ).
 
 normalize_lists_test() ->
     ?assertEqual(
-        lists,
+        <<"lists">>,
         spectrometer_utils:normalize_module_name("lists")
     ).
 
 normalize_with_flag_test() ->
     ?assertEqual(
-        'Elixir.GPIO',
+        <<"Elixir.GPIO">>,
         spectrometer_utils:normalize_module_name("GPIO", true)
     ),
     ?assertEqual(
-        'GPIO',
+        <<"GPIO">>,
         spectrometer_utils:normalize_module_name("GPIO", false)
     ).
 

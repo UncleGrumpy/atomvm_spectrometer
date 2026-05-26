@@ -11,23 +11,23 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(SAMPLE_STATS, #{
-    {lists, map, 2} => 10,
-    {lists, filter, 2} => 5,
-    {io, format, 2} => 3,
-    {erlang, display, 1} => 1,
-    {string, find, 3} => 7,
-    {binary, match, 2} => 2
+    {<<"lists">>, <<"map">>, 2} => 10,
+    {<<"lists">>, <<"filter">>, 2} => 5,
+    {<<"io">>, <<"format">>, 2} => 3,
+    {<<"erlang">>, <<"display">>, 1} => 1,
+    {<<"string">>, <<"find">>, 3} => 7,
+    {<<"binary">>, <<"match">>, 2} => 2
 }).
 
 -define(SAMPLE_REPORT, #{
     supported => [
-        {{erlang, display, 1}, 1},
-        {{lists, map, 2}, 10}
+        {{<<"erlang">>, <<"display">>, 1}, 1},
+        {{<<"lists">>, <<"map">>, 2}, 10}
     ],
     unsupported => [
-        {{io, format, 2}, 3},
-        {{string, find, 3}, 7},
-        {{binary, match, 2}, 2}
+        {{<<"io">>, <<"format">>, 2}, 3},
+        {{<<"string">>, <<"find">>, 3}, 7},
+        {{<<"binary">>, <<"match">>, 2}, 2}
     ],
     total => 23,
     total_unique => 5
@@ -39,7 +39,7 @@
 
 generate_report1_delegates_test() ->
     % generate_report/1 should delegate to generate_report/2 with MinCount=1
-    Stats = #{{lists, map, 2} => 5},
+    Stats = #{{<<"lists">>, <<"map">>, 2} => 5},
     Report = spectrometer_reporter:generate_report(Stats),
     ?assert(maps:is_key(supported, Report)),
     ?assert(maps:is_key(unsupported, Report)),
@@ -49,30 +49,32 @@ generate_report1_delegates_test() ->
 generate_report2_filters_non_otp_test() ->
     % generate_report/2 should filter out non-OTP functions
     Stats = #{
-        {my_app, my_func, 2} => 5,
-        {lists, map, 2} => 3
+        {<<"my_app">>, <<"my_func">>, 2} => 5,
+        {<<"lists">>, <<"map">>, 2} => 3
     },
     Report = spectrometer_reporter:generate_report(Stats, 1),
     % my_app is not an OTP module, should be filtered out
     Supp = maps:get(supported, Report),
     Unsupp = maps:get(unsupported, Report),
     ?assert(
-        lists:keymember({lists, map, 2}, 1, Supp) orelse
-            lists:keymember({lists, map, 2}, 1, Unsupp)
+        lists:keymember({<<"lists">>, <<"map">>, 2}, 1, Supp) orelse
+            lists:keymember({<<"lists">>, <<"map">>, 2}, 1, Unsupp)
     ),
     % Explicitly verify non-OTP function was removed
-    ?assertNot(lists:keymember({my_app, my_func, 2}, 1, Supp)),
-    ?assertNot(lists:keymember({my_app, my_func, 2}, 1, Unsupp)).
+    ?assertNot(lists:keymember({<<"my_app">>, <<"my_func">>, 2}, 1, Supp)),
+    ?assertNot(lists:keymember({<<"my_app">>, <<"my_func">>, 2}, 1, Unsupp)).
 
 generate_report2_applies_min_count_test() ->
-    Stats = #{{lists, map, 2} => 10, {io, format, 2} => 2},
+    Stats = #{
+        {<<"lists">>, <<"map">>, 2} => 10, {<<"io">>, <<"format">>, 2} => 2
+    },
     Report = spectrometer_reporter:generate_report(Stats, 5),
     Supp = maps:get(supported, Report),
     Unsupp = maps:get(unsupported, Report),
     All = Supp ++ Unsupp,
     % Only lists:map/2 should remain (count >= 5)
-    ?assert(lists:keyfind({lists, map, 2}, 1, All) =/= false),
-    ?assert(lists:keyfind({io, format, 2}, 1, All) =:= false).
+    ?assert(lists:keyfind({<<"lists">>, <<"map">>, 2}, 1, All) =/= false),
+    ?assert(lists:keyfind({<<"io">>, <<"format">>, 2}, 1, All) =:= false).
 
 generate_report2_empty_input_test() ->
     Stats = #{},
@@ -87,15 +89,20 @@ generate_report2_empty_input_test() ->
 %% =============================================================================
 
 filter_otp_functions_keeps_otp_test() ->
-    Stats = #{{lists, map, 2} => 1, {io, format, 2} => 2},
+    Stats = #{
+        {<<"lists">>, <<"map">>, 2} => 1, {<<"io">>, <<"format">>, 2} => 2
+    },
     Filtered = spectrometer_reporter:filter_otp_functions(Stats),
     ?assertEqual(2, maps:size(Filtered)).
 
 filter_otp_functions_removes_non_otp_test() ->
-    Stats = #{{my_custom_mod, func, 1} => 1, {lists, map, 2} => 1},
+    Stats = #{
+        {<<"my_custom_mod">>, <<"func">>, 1} => 1,
+        {<<"lists">>, <<"map">>, 2} => 1
+    },
     Filtered = spectrometer_reporter:filter_otp_functions(Stats),
     ?assertEqual(1, maps:size(Filtered)),
-    ?assert(maps:is_key({lists, map, 2}, Filtered)).
+    ?assert(maps:is_key({<<"lists">>, <<"map">>, 2}, Filtered)).
 
 filter_otp_functions_empty_test() ->
     ?assertEqual(#{}, spectrometer_reporter:filter_otp_functions(#{})).
@@ -113,7 +120,11 @@ filter_otp_functions_empty_test() ->
 %% =============================================================================
 
 sort_stats_descending_test() ->
-    Stats = [{{a, b, 1}, 1}, {{c, d, 2}, 5}, {{e, f, 3}, 3}],
+    Stats = [
+        {{<<"a">>, <<"b">>, 1}, 1},
+        {{<<"c">>, <<"d">>, 2}, 5},
+        {{<<"e">>, <<"f">>, 3}, 3}
+    ],
     Sorted = spectrometer_reporter:sort_stats(Stats),
     {{_, _, _}, C1} = lists:nth(1, Sorted),
     {{_, _, _}, C2} = lists:nth(2, Sorted),
@@ -126,7 +137,7 @@ sort_stats_empty_test() ->
     ?assertEqual([], spectrometer_reporter:sort_stats([])).
 
 sort_stats_single_test() ->
-    Stats = [{{one, two, 3}, 42}],
+    Stats = [{{<<"one">>, <<"two">>, 3}, 42}],
     ?assertEqual(Stats, spectrometer_reporter:sort_stats(Stats)).
 
 %% =============================================================================
@@ -158,11 +169,11 @@ write_csv_test_() ->
                     % Create a proper Report structure
                     Report = #{
                         supported => [
-                            {{erlang, display, 1}, 1}
+                            {{<<"erlang">>, <<"display">>, 1}, 1}
                         ],
                         unsupported => [
-                            {{lists, map, 2}, 10},
-                            {{io, format, 2}, 3}
+                            {{<<"lists">>, <<"map">>, 2}, 10},
+                            {{<<"io">>, <<"format">>, 2}, 3}
                         ],
                         total => 14,
                         total_unique => 3
@@ -200,12 +211,12 @@ write_csv_limit_test_() ->
                 ?_test(begin
                     Report = #{
                         supported => [
-                            {{erlang, display, 1}, 1}
+                            {{<<"erlang">>, <<"display">>, 1}, 1}
                         ],
                         unsupported => [
-                            {{lists, map, 2}, 10},
-                            {{io, format, 2}, 3},
-                            {{string, find, 3}, 7}
+                            {{<<"lists">>, <<"map">>, 2}, 10},
+                            {{<<"io">>, <<"format">>, 2}, 3},
+                            {{<<"string">>, <<"find">>, 3}, 7}
                         ],
                         total => 21,
                         total_unique => 4
@@ -237,9 +248,9 @@ write_csv_limit_one_test() ->
                     Report = #{
                         supported => [],
                         unsupported => [
-                            {{a, b, 1}, 1},
-                            {{c, d, 2}, 2},
-                            {{e, f, 3}, 3}
+                            {{<<"a">>, <<"b">>, 1}, 1},
+                            {{<<"c">>, <<"d">>, 2}, 2},
+                            {{<<"e">>, <<"f">>, 3}, 3}
                         ],
                         total => 6,
                         total_unique => 3
@@ -270,8 +281,8 @@ print_summary_test_() ->
         [
             ?_test(begin
                 Report = #{
-                    supported => [{{lists, map, 2}, 5}],
-                    unsupported => [{{io, format, 2}, 3}],
+                    supported => [{{<<"lists">>, <<"map">>, 2}, 5}],
+                    unsupported => [{{<<"io">>, <<"format">>, 2}, 3}],
                     total => 8,
                     total_unique => 2
                 },
@@ -280,7 +291,7 @@ print_summary_test_() ->
             ?_test(begin
                 % All supported case
                 Report = #{
-                    supported => [{{lists, map, 2}, 5}],
+                    supported => [{{<<"lists">>, <<"map">>, 2}, 5}],
                     unsupported => [],
                     total => 5,
                     total_unique => 1

@@ -834,23 +834,36 @@ is_digit_binary_invalid_test_() ->
 %% =============================================================================
 %% build_db_from_list/1 tests
 %% =============================================================================
-
 build_db_from_list_test_() ->
     {"builds database map from list of entries", fun() ->
         Data = [
-            {my_module, [
-                {func1, 1, all, {unreleased, <<"main">>}},
-                {func2, 2, [esp32], {unreleased, <<"main">>}}
+            {<<"my_module">>, [
+                {<<"func1">>, 1, all, {unreleased, <<"main">>}},
+                {<<"func2">>, 2, [esp32], {unreleased, <<"main">>}}
             ]}
         ],
         DB = spectrometer_updater:build_db_from_list(Data),
         ?assertEqual(
             {all, {unreleased, <<"main">>}},
-            maps:get({my_module, func1, 1}, DB)
+            maps:get({<<"my_module">>, <<"func1">>, 1}, DB)
         ),
         ?assertEqual(
             {[esp32], {unreleased, <<"main">>}},
-            maps:get({my_module, func2, 2}, DB)
+            maps:get({<<"my_module">>, <<"func2">>, 2}, DB)
+        )
+    end}.
+
+build_db_from_list_atom_keys_test_() ->
+    {"builds database map from atom keys (backward compat)", fun() ->
+        Data = [
+            {my_module, [
+                {func1, 1, all, {unreleased, <<"main">>}}
+            ]}
+        ],
+        DB = spectrometer_updater:build_db_from_list(Data),
+        ?assertEqual(
+            {all, {unreleased, <<"main">>}},
+            maps:get({<<"my_module">>, <<"func1">>, 1}, DB)
         )
     end}.
 
@@ -866,7 +879,7 @@ find_first_match_found_test_() ->
             "-export([test/0])."
         ],
         ?assertEqual(
-            test_mod,
+            <<"test_mod">>,
             spectrometer_updater:find_first_match(
                 "-module\\s*\\(\\s*([a-z_][a-z0-9_]*)\\s*\\)\\s*\\.", Lines
             )
@@ -891,10 +904,9 @@ find_first_match_not_found_test_() ->
 find_exports_single_test_() ->
     {"finds exports from single-line -export", fun() ->
         Lines = ["-export([func/1, other/2])."],
-        ?assertEqual(
-            [{func, 1}, {other, 2}],
-            lists:sort(spectrometer_updater:find_exports(Lines))
-        )
+        Result =
+            lists:sort(spectrometer_updater:find_exports(Lines)),
+        ?assertEqual([{<<"func">>, 1}, {<<"other">>, 2}], Result)
     end}.
 
 find_exports_multiline_test_() ->
@@ -906,7 +918,7 @@ find_exports_multiline_test_() ->
             "])."
         ],
         ?assertEqual(
-            [{func1, 1}, {func2, 2}],
+            [{<<"func1">>, 1}, {<<"func2">>, 2}],
             lists:sort(spectrometer_updater:find_exports(Lines))
         )
     end}.
@@ -924,7 +936,7 @@ find_exports_none_test_() ->
 parse_export_list_basic_test_() ->
     {"parses basic export list", fun() ->
         ?assertEqual(
-            [{bar, 2}, {foo, 1}],
+            [{<<"bar">>, 2}, {<<"foo">>, 1}],
             lists:sort(spectrometer_updater:parse_export_list("[foo/1,bar/2]"))
         )
     end}.
@@ -932,7 +944,7 @@ parse_export_list_basic_test_() ->
 parse_export_list_with_spaces_test_() ->
     {"handles spaces around commas", fun() ->
         ?assertEqual(
-            [{bar, 2}, {foo, 1}],
+            [{<<"bar">>, 2}, {<<"foo">>, 1}],
             lists:sort(spectrometer_updater:parse_export_list("foo/1 , bar/2"))
         )
     end}.
@@ -1140,9 +1152,9 @@ find_elixir_exports_test_() ->
         ],
         Exports = spectrometer_updater:find_elixir_exports(Lines),
         Expected = [
-            {'Elixir.TestModule', 'bang!', 0},
-            {'Elixir.TestModule', public, 1},
-            {'Elixir.TestModule', 'with_qmark?', 1}
+            {<<"Elixir.TestModule">>, <<"bang!">>, 0},
+            {<<"Elixir.TestModule">>, <<"public">>, 1},
+            {<<"Elixir.TestModule">>, <<"with_qmark?">>, 1}
         ],
         ?assertEqual(Expected, lists:sort(Exports))
     end}.
@@ -1185,11 +1197,19 @@ scan_exavmlib_dir_test_() ->
                     ),
                     ?assert(is_map(Acc)),
                     ?assert(
-                        maps:is_key({'Elixir.MyModule', public_func, 1}, Acc)
+                        maps:is_key(
+                            {<<"Elixir.MyModule">>, <<"public_func">>, 1}, Acc
+                        )
                     ),
-                    ?assert(maps:is_key({'Elixir.OtherMod', another, 0}, Acc)),
+                    ?assert(
+                        maps:is_key(
+                            {<<"Elixir.OtherMod">>, <<"another">>, 0}, Acc
+                        )
+                    ),
                     ?assertNot(
-                        maps:is_key({'Elixir.MyModule', private_func, 1}, Acc)
+                        maps:is_key(
+                            {<<"Elixir.MyModule">>, <<"private_func">>, 1}, Acc
+                        )
                     )
                 end)
             end}}.

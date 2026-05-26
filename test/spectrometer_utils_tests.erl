@@ -367,40 +367,49 @@ start_applications_success_test_() ->
 normalize_module_name_string_test_() ->
     {"normalizes string module name",
         ?_assertEqual(
-            'Elixir.GPIO',
+            <<"Elixir.GPIO">>,
             spectrometer_utils:normalize_module_name("Elixir.GPIO")
         )}.
 
 normalize_module_name_atom_test_() ->
     {"normalizes atom module name",
         ?_assertEqual(
-            'Elixir.GPIO',
+            <<"Elixir.GPIO">>,
             spectrometer_utils:normalize_module_name('Elixir.GPIO')
         )}.
 
 normalize_module_name_non_elixir_atom_test_() ->
     {"normalizes atom without Elixir prefix",
-        ?_assertEqual(lists, spectrometer_utils:normalize_module_name(lists))}.
+        ?_assertEqual(
+            <<"lists">>, spectrometer_utils:normalize_module_name(lists)
+        )}.
 
 normalize_module_name_2_atom_test_() ->
     {"normalize_module_name/2 with atom and ElixirFlag=true",
         ?_assertEqual(
-            'Elixir.GPIO',
+            <<"Elixir.GPIO">>,
             spectrometer_utils:normalize_module_name('GPIO', true)
         )}.
 
 normalize_module_name_2_string_test_() ->
     {"normalize_module_name/2 with string and ElixirFlag=true",
         ?_assertEqual(
-            'Elixir.GPIO',
+            <<"Elixir.GPIO">>,
             spectrometer_utils:normalize_module_name("GPIO", true)
         )}.
 
 normalize_module_name_2_false_flag_test_() ->
     {"normalize_module_name/2 with ElixirFlag=false preserves Elixir prefix",
         ?_assertEqual(
-            'Elixir.GPIO',
+            <<"Elixir.GPIO">>,
             spectrometer_utils:normalize_module_name("Elixir.GPIO", false)
+        )}.
+
+normalize_module_name_2_false_flag_non_elixir_test_() ->
+    {"normalize_module_name/2 with ElixirFlag=false preserves module as-is",
+        ?_assertEqual(
+            <<"lists">>,
+            spectrometer_utils:normalize_module_name("lists", false)
         )}.
 
 %% =============================================================================

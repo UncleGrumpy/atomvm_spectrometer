@@ -135,13 +135,15 @@ update(Opts) ->
             end
     end.
 
--spec build_db_from_list([{atom(), term()}]) -> map().
+-spec build_db_from_list([{atom() | binary(), term()}]) -> map().
 build_db_from_list(Data) ->
     lists:foldl(
         fun({Mod, Funs}, Acc) ->
+            ModBin = ensure_key_binary(Mod),
             lists:foldl(
                 fun({F, A, Platforms, Since0}, A2) ->
-                    maps:put({Mod, F, A}, {Platforms, Since0}, A2)
+                    FBin = ensure_key_binary(F),
+                    maps:put({ModBin, FBin, A}, {Platforms, Since0}, A2)
                 end,
                 Acc,
                 Funs
@@ -150,6 +152,12 @@ build_db_from_list(Data) ->
         #{},
         Data
     ).
+
+-spec ensure_key_binary(binary() | atom()) -> binary().
+ensure_key_binary(Bin) when is_binary(Bin) ->
+    Bin;
+ensure_key_binary(Atom) when is_atom(Atom) ->
+    atom_to_binary(Atom, utf8).
 
 -doc """
 Update the supported functions database by scanning an AtomVM repository using the provided options.
@@ -276,7 +284,7 @@ Parses gperf files, platform NIFs, Erlang and Elixir library exports, and
 - `Since` — Version tag (e.g. `<<"v0.7.0">>`) or branch info
 """.
 -spec scan_atomvm_repo(string(), scan_opts(), since()) ->
-    #{{atom(), atom(), arity()} => entry()}.
+    #{{binary(), binary(), arity()} => entry()}.
 scan_atomvm_repo(RepoDir, Opts, Since) ->
     io:format("Scanning AtomVM repo at ~s (since: ~p)\n", [RepoDir, Since]),
     LibDir = filename:join(RepoDir, "src/libAtomVM"),
@@ -339,7 +347,7 @@ Formats the accumulated scan results into a machine-generated `.data` file
 containing `{Module, [{Function, Arity, Platforms, Since}]}` tuples sorted
 by module name.
 """.
--spec write_db_file(string(), #{{atom(), atom(), arity()} => entry()}) ->
+-spec write_db_file(string(), #{{binary(), binary(), arity()} => entry()}) ->
     ok | {error, Reason :: term()}.
 write_db_file(Path, Acc) ->
     ByMod = maps:fold(
@@ -726,8 +734,8 @@ parse_platform_nifs(File, Platform, Acc, Since) ->
     MergeFun = fun([ModStr, FunStr, ArityStr], A) ->
         Arity = list_to_integer(ArityStr),
         Key = {
-            spectrometer_utils:atom_from_string(ModStr),
-            spectrometer_utils:atom_from_string(FunStr),
+            spectrometer_utils:string_to_binary(ModStr),
+            spectrometer_utils:string_to_binary(FunStr),
             Arity
         },
         maps:update_with(
@@ -795,7 +803,7 @@ merge_platforms(Existing, NewPlatform) ->
 parse_bifs_gperf(File, Acc, Platforms, Since) ->
     KeyFun = fun([Fun, ArityStr]) ->
         Arity = list_to_integer(ArityStr),
-        {erlang, spectrometer_utils:atom_from_string(Fun), Arity}
+        {<<"erlang">>, spectrometer_utils:string_to_binary(Fun), Arity}
     end,
     parse_file_entries(
         File,
@@ -810,8 +818,8 @@ parse_nifs_gperf(File, Acc, Platforms, Since) ->
     KeyFun = fun([Mod, Fun, ArityStr]) ->
         Arity = list_to_integer(ArityStr),
         {
-            spectrometer_utils:atom_from_string(Mod),
-            spectrometer_utils:atom_from_string(Fun),
+            spectrometer_utils:string_to_binary(Mod),
+            spectrometer_utils:string_to_binary(Fun),
             Arity
         }
     end,
@@ -960,7 +968,7 @@ find_first_match(_Regex, [], Default) ->
     Default;
 find_first_match(Regex, [Line | Rest], Default) ->
     case re:run(Line, Regex, [{capture, all_but_first, list}]) of
-        {match, [Name]} -> spectrometer_utils:atom_from_string(Name);
+        {match, [Name]} -> spectrometer_utils:string_to_binary(Name);
         _ -> find_first_match(Regex, Rest, Default)
     end.
 
@@ -1008,7 +1016,7 @@ parse_export_list(Content) ->
             of
                 {match, [Fun, ArityStr]} ->
                     {true, {
-                        spectrometer_utils:atom_from_string(Fun),
+                        spectrometer_utils:string_to_binary(Fun),
                         list_to_integer(ArityStr)
                     }};
                 _ ->
@@ -1048,8 +1056,9 @@ scan_calls_dir(Dir, Label, Acc, Since) ->
 
 scan_calls(Files, Acc, Since) ->
     OTPMods = spectrometer_otp:modules_list(),
-    OTPAtoms = [spectrometer_utils:atom_from_string(Mod) || Mod <- OTPMods],
-    OTPSet = sets:from_list(OTPAtoms),
+    OTPBins =
+        [spectrometer_utils:string_to_binary(Mod) || Mod <- OTPMods],
+    OTPSet = sets:from_list(OTPBins),
     lists:foldl(
         fun(File, A) ->
             case spectrometer_scanner:parse_calls(File) of
@@ -1184,8 +1193,8 @@ parse_elixir_file(File, Acc, Platforms, Since) ->
             % Find all exports with their module context
             Exports = find_elixir_exports(Lines),
             lists:foldl(
-                fun({ModAtom, FunName, Arity}, A) ->
-                    Key = {ModAtom, FunName, Arity},
+                fun({Mod, Fun, Arity}, A) ->
+                    Key = {Mod, Fun, Arity},
                     maps:put(Key, {Platforms, Since}, A)
                 end,
                 Acc,
@@ -1219,29 +1228,31 @@ find_elixir_exports(
     case find_elixir_module_def(Line) of
         {defmodule, ModName} ->
             % Entering a new defmodule block - track its indentation
-            ModAtom = spectrometer_utils:atom_from_string("Elixir." ++ ModName),
+            ModBin = spectrometer_utils:string_to_binary(
+                "Elixir." ++ ModName
+            ),
             Indent = get_indent(Line),
             find_elixir_exports(
-                Rest, [{ModAtom, Indent} | ModuleStack], ModAtom, Acc
+                Rest, [{ModBin, Indent} | ModuleStack], ModBin, Acc
             );
         {defimpl, ProtocolName} ->
             % Entering a defimpl block (also counts as a module context)
             % Without explicit for, just use the protocol name
-            ModAtom = spectrometer_utils:atom_from_string(
+            ModBin = spectrometer_utils:string_to_binary(
                 "Elixir." ++ ProtocolName
             ),
             Indent = get_indent(Line),
             find_elixir_exports(
-                Rest, [{ModAtom, Indent} | ModuleStack], ModAtom, Acc
+                Rest, [{ModBin, Indent} | ModuleStack], ModBin, Acc
             );
         {defimpl, ProtocolName, TargetName} ->
             % Entering a defimpl Protocol, for: Target block
-            ModAtom = spectrometer_utils:atom_from_string(
+            ModBin = spectrometer_utils:string_to_binary(
                 "Elixir." ++ ProtocolName ++ "." ++ TargetName
             ),
             Indent = get_indent(Line),
             find_elixir_exports(
-                Rest, [{ModAtom, Indent} | ModuleStack], ModAtom, Acc
+                Rest, [{ModBin, Indent} | ModuleStack], ModBin, Acc
             );
         {end_block} ->
             % Pop module scope if end line indentation matches top module's indentation
@@ -1270,14 +1281,16 @@ find_elixir_exports(
             case find_elixir_def(Line) of
                 {ok, FunName, Args} ->
                     Arity = count_arity(Args),
-                    FunAtom = spectrometer_utils:atom_from_string(FunName),
+                    FunBin = spectrometer_utils:string_to_binary(
+                        FunName
+                    ),
                     Export =
                         case CurrentModule of
                             undefined ->
                                 % Fallback: use filename-based module (shouldn't happen normally)
-                                {unknown, FunAtom, Arity};
-                            ModAtom ->
-                                {ModAtom, FunAtom, Arity}
+                                {unknown, FunBin, Arity};
+                            ModBin ->
+                                {ModBin, FunBin, Arity}
                         end,
                     find_elixir_exports(
                         Rest, ModuleStack, CurrentModule, [Export | Acc]
@@ -1300,7 +1313,7 @@ find_elixir_module_def(Line) ->
             case
                 re:run(
                     Line,
-                    "^\\s*defmodule\\s+([A-Za-z_][A-Za-z0-9_.]*)\\s+do\\b",
+                    "^\\s*defmodule\\s+([A-Z][A-Za-z0-9_.]*)\\s+do\\b",
                     [
                         {capture, all_but_first, list}
                     ]
@@ -1313,7 +1326,7 @@ find_elixir_module_def(Line) ->
                     case
                         re:run(
                             Line,
-                            "^\\s*defimpl\\s+([A-Za-z_][A-Za-z0-9_.]*),\\s*for:\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s+do\\b",
+                            "^\\s*defimpl\\s+([A-Z][A-Za-z0-9_.]*),\\s*for:\\s*([A-Z][A-Za-z0-9_.]*)\\s+do\\b",
                             [{capture, all_but_first, list}]
                         )
                     of
@@ -1324,7 +1337,7 @@ find_elixir_module_def(Line) ->
                             case
                                 re:run(
                                     Line,
-                                    "^\\s*defimpl\\s+([A-Za-z_][A-Za-z0-9_.]*)\\s+do\\b",
+                                    "^\\s*defimpl\\s+([A-Z][A-Za-z0-9_.]*)\\s+do\\b",
                                     [{capture, all_but_first, list}]
                                 )
                             of

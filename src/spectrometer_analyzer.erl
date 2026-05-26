@@ -38,7 +38,7 @@ reporter.
     | {hex, string(), string()}
     | {local_dir, string()}.
 
--type stats_map() :: #{{atom(), atom(), arity()} => non_neg_integer()}.
+-type stats_map() :: #{{binary(), binary(), arity()} => non_neg_integer()}.
 
 -type csv_row() :: {
     string(), string(), non_neg_integer(), non_neg_integer(), non_neg_integer()
@@ -252,7 +252,7 @@ scan_target({hex, PackageName, Version}) ->
     end.
 
 -spec scan_multi(string()) ->
-    #{{atom(), atom(), arity()} => non_neg_integer()}.
+    #{{binary(), binary(), arity()} => non_neg_integer()}.
 scan_multi(File) ->
     case file:read_file(File) of
         {ok, Bin} ->
@@ -340,7 +340,7 @@ merge_stats(New, Acc) ->
     ).
 
 -spec load_ecosystem_state() ->
-    #{{atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}}.
+    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}}.
 load_ecosystem_state() ->
     CacheDir = spectrometer_utils:user_cache_path(),
     StateFile = filename:join(CacheDir, ?ECOSYSTEM_STATE),
@@ -458,11 +458,11 @@ load_filter_data(Opts) ->
             case load_ecosystem_state() of
                 Stats when map_size(Stats) > 0 ->
                     maps:fold(
-                        fun({Mod, Fun, Arity}, {Calls, RepoCount}, Acc) ->
+                        fun({ModBin, FunBin, Arity}, {Calls, RepoCount}, Acc) ->
                             [
                                 {
-                                    atom_to_list(Mod),
-                                    atom_to_list(Fun),
+                                    binary_to_list(ModBin),
+                                    binary_to_list(FunBin),
                                     Arity,
                                     Calls,
                                     RepoCount
@@ -498,12 +498,11 @@ Filter rows by AtomVM support status, only report unsupported functions.
 filter_by_avm_support(Rows) ->
     lists:filter(
         fun({ModStr, FunStr, Arity, _Calls, _RepoCount}) ->
-            % First try to create atoms using list_to_existing_atom for validation
-            {Mod, Fun} = {
-                spectrometer_utils:atom_from_string(ModStr),
-                spectrometer_utils:atom_from_string(FunStr)
-            },
-            false =:= spectrometer_atomvm:is_supported({Mod, Fun, Arity})
+            % Convert strings to binaries for is_supported check
+            ModBin = list_to_binary(ModStr),
+            FunBin = list_to_binary(FunStr),
+            false =:=
+                spectrometer_atomvm:is_supported({ModBin, FunBin, Arity})
         end,
         Rows
     ).

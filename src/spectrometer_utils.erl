@@ -19,7 +19,7 @@ directory removal, and GitHub URL normalization for deduplication.
 """.
 
 -export([
-    atom_from_string/1,
+    string_to_binary/1,
     clone_temp_repo/2,
     bundled_data_path/0,
     is_elixir_module_name/1,
@@ -38,17 +38,12 @@ directory removal, and GitHub URL normalization for deduplication.
 
 -type platform() :: emscripten | esp32 | generic_unix | rp2 | stm32.
 
--doc """
-Convert a string to an atom, using list_to_existing_atom if possible for safety.
-If the string does not correspond to an existing atom, it will be created with list_to_atom.
-""".
--spec atom_from_string(string()) -> atom().
-atom_from_string(Str) ->
-    try
-        list_to_existing_atom(Str)
-    catch
-        error:badarg -> list_to_atom(Str)
-    end.
+-doc "If the given string is not already a binary string, convert it to binary".
+-spec string_to_binary(string() | binary()) -> binary().
+string_to_binary(Str) when is_list(Str) ->
+    list_to_binary(Str);
+string_to_binary(Bin) when is_binary(Bin) ->
+    Bin.
 
 -doc """
 Return the path to the bundled human-readable data file.
@@ -410,27 +405,33 @@ os_temp_dir() ->
             "/tmp"
     end.
 
--doc """
-Detect if a module name is Elixir-style (starts with literal "Elixir." prefix).
-Does not infer from capitalization.
-""".
--spec is_elixir_module_name(atom() | string()) -> boolean().
+-doc "Detect if a module name is Elixir-style (starts with literal Elixir. prefix).".
+-spec is_elixir_module_name(atom() | string() | binary()) -> boolean().
 is_elixir_module_name(Atom) when is_atom(Atom) ->
     is_elixir_module_name(atom_to_list(Atom));
 is_elixir_module_name(Str) when is_list(Str) ->
     case Str of
         "Elixir." ++ _ -> true;
         _ -> false
+    end;
+is_elixir_module_name(Bin) when is_binary(Bin) ->
+    case Bin of
+        <<"Elixir.", _/binary>> -> true;
+        _ -> false
     end.
 
 -doc """
-Normalize module name. 'Elixir.GPIO' -> 'Elixir.GPIO', 'GPIO' -> 'Elixir.GPIO', 'lists' -> 'lists'.
-For Elixir modules parsed from dot syntax, use normalize_module_name/2 with ElixirFlag=true.
+Normalize module name without Elixir prefixing. 'Elixir.GPIO' -> <<"Elixir.GPIO">>,
+'GPIO' -> <<"GPIO">>, 'lists' -> <<"lists">>. Delegates to normalize_module_name/2 with
+ElixirFlag = false. For Elixir-prefixed output, use normalize_module_name/2 with
+ElixirFlag = true. Returns a binary().
 """.
 -spec normalize_module_name(string() | atom() | binary()) -> binary().
 normalize_module_name(Atom) when is_atom(Atom) ->
     normalize_module_name(atom_to_list(Atom));
 normalize_module_name(Str) when is_list(Str) ->
+    normalize_module_name(Str, false);
+normalize_module_name(Str) when is_binary(Str) ->
     normalize_module_name(Str, false).
 
 -doc """
@@ -457,13 +458,13 @@ normalize_module_name(Atom, ElixirFlag) when is_atom(Atom) ->
 normalize_module_name(Str, true) when is_list(Str) ->
     case Str of
         "Elixir." ++ _ ->
-            atom_from_string(Str);
+            string_to_binary(Str);
         [C | _] when C >= $A, C =< $Z ->
             % Capitalized module name - treat as Elixir module
-            atom_from_string("Elixir." ++ Str);
+            string_to_binary("Elixir." ++ Str);
         _ ->
             % Lowercase (Erlang module) or other - keep as-is
-            atom_from_string(Str)
+            string_to_binary(Str)
     end;
 normalize_module_name(Bin, true) when is_binary(Bin) ->
     case Bin of
@@ -472,9 +473,6 @@ normalize_module_name(Bin, true) when is_binary(Bin) ->
         _ -> Bin
     end;
 normalize_module_name(Str, false) when is_list(Str) ->
-    case Str of
-        "Elixir." ++ _ ->
-            atom_from_string(Str);
-        _ ->
-            atom_from_string(Str)
-    end.
+    string_to_binary(Str);
+normalize_module_name(Str, false) when is_binary(Str) ->
+    Str.
