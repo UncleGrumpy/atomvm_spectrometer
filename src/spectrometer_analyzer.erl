@@ -524,57 +524,41 @@ is_valid_url(Url) ->
             true
     end.
 
--doc """
-Print the filtered results organized by module.
-""".
+-doc "Print the filtered results sorted by repository count (desc), then call count (desc). MFAs are kept together as Module:Function/Arity pairs.".
 -spec print_filtered_results([csv_row()], non_neg_integer(), boolean()) -> ok.
 print_filtered_results(Filtered, MinRepos, AvmFilter) ->
-    ByModule = lists:foldl(
-        fun({Mod, Fun, Arity, Calls, RC}, Acc) ->
-            maps:update_with(
-                Mod,
-                fun(L) -> [{Fun, Arity, Calls, RC} | L] end,
-                [{Fun, Arity, Calls, RC}],
-                Acc
-            )
+    Sorted = lists:sort(
+        fun({_, _, _, Calls1, RC1}, {_, _, _, Calls2, RC2}) ->
+            case RC1 =:= RC2 of
+                true -> Calls1 > Calls2;
+                false -> RC1 > RC2
+            end
         end,
-        #{},
         Filtered
     ),
 
-    Modules = lists:sort(maps:to_list(ByModule)),
-    TotalFuns = lists:sum([length(Funs) || {_, Funs} <- Modules]),
+    TotalFuns = length(Sorted),
 
     case AvmFilter of
         true ->
             io:format(
-                "OTP functions not supported by AtomVM (>= ~p repos): ~p functions across ~p modules\n\n",
-                [MinRepos, TotalFuns, length(Modules)]
+                "OTP functions not supported by AtomVM (>= ~p repos): ~p functions\n",
+                [MinRepos, TotalFuns]
             );
         false ->
             io:format(
-                "OTP functions used by >= ~p repos: ~p functions across ~p modules\n\n",
-                [MinRepos, TotalFuns, length(Modules)]
+                "OTP functions used by >= ~p repos: ~p functions\n",
+                [MinRepos, TotalFuns]
             )
     end,
 
     lists:foreach(
-        fun({Mod, Funs}) ->
-            Sorted = lists:sort(
-                fun({_, _, _, RC1}, {_, _, _, RC2}) -> RC1 > RC2 end, Funs
-            ),
-            io:format("~ts (~p functions):\n", [Mod, length(Sorted)]),
-            lists:foreach(
-                fun({Fun, Arity, Calls, RC}) ->
-                    io:format("  ~ts/~p  (~p calls in ~p repos)\n", [
-                        Fun, Arity, Calls, RC
-                    ])
-                end,
-                Sorted
-            ),
-            io:format("\n")
+        fun({Mod, Fun, Arity, Calls, RC}) ->
+            io:format("  ~ts:~ts/~p  (~p calls in ~p repos)\n", [
+                Mod, Fun, Arity, Calls, RC
+            ])
         end,
-        Modules
+        Sorted
     ).
 
 -doc """
