@@ -520,7 +520,9 @@ parse_filter_args_multiple_csv_test_() ->
 parse_filter_args_invalid_min_repos_test_() ->
     {"returns error for invalid --min-repos", fun() ->
         {error, Msg} = atomvm_spectrometer:parse_args([
-        )
+            "filter", "results.csv", "--min-repos", "abc"
+        ]),
+        ?assert(string:str(Msg, "Invalid") > 0)
     end}.
 
 parse_supported_args_capitalized_module_no_prefix_test_() ->
@@ -549,8 +551,10 @@ parse_supported_args_unknown_flag_test_() ->
     end}.
 
 %% =============================================================================
-%% parse_filter_args/2 tests
+%% parse_filter_args/2 additional tests
 %% =============================================================================
+
+parse_filter_args_unknown_option_test_() ->
     {"returns error for flag-shaped option where csv_file expected", fun() ->
         {error, Msg} = atomvm_spectrometer:parse_args([
             "filter", "--unknown-flag"
