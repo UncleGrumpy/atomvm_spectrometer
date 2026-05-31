@@ -25,7 +25,6 @@ directory removal, and GitHub URL normalization for deduplication.
     is_elixir_module_name/1,
     make_temp_dir/1,
     normalize_github_url/1,
-    normalize_module_name/1,
     normalize_module_name/2,
     normalize_platform_name/1,
     purge_dir/1,
@@ -405,34 +404,20 @@ os_temp_dir() ->
             "/tmp"
     end.
 
--doc "Detect if a module name is Elixir-style (starts with literal Elixir. prefix).".
+-doc "Detect if a module name is capitalized (Elixir style).".
 -spec is_elixir_module_name(atom() | string() | binary()) -> boolean().
 is_elixir_module_name(Atom) when is_atom(Atom) ->
     is_elixir_module_name(atom_to_list(Atom));
 is_elixir_module_name(Str) when is_list(Str) ->
-    case Str of
-        "Elixir." ++ _ -> true;
+    case normalize_module_name(Str, true) of
+        <<"Elixir.", _/binary>> -> true;
         _ -> false
     end;
 is_elixir_module_name(Bin) when is_binary(Bin) ->
-    case Bin of
+    case normalize_module_name(Bin, true) of
         <<"Elixir.", _/binary>> -> true;
         _ -> false
     end.
-
--doc """
-Normalize module name without Elixir prefixing. 'Elixir.GPIO' -> <<"Elixir.GPIO">>,
-'GPIO' -> <<"GPIO">>, 'lists' -> <<"lists">>. Delegates to normalize_module_name/2 with
-ElixirFlag = false. For Elixir-prefixed output, use normalize_module_name/2 with
-ElixirFlag = true. Returns a binary().
-""".
--spec normalize_module_name(string() | atom() | binary()) -> binary().
-normalize_module_name(Atom) when is_atom(Atom) ->
-    normalize_module_name(atom_to_list(Atom));
-normalize_module_name(Str) when is_list(Str) ->
-    normalize_module_name(Str, false);
-normalize_module_name(Str) when is_binary(Str) ->
-    normalize_module_name(Str, false).
 
 -doc """
 Normalize module name.
