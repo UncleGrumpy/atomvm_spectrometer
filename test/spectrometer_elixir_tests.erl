@@ -42,25 +42,11 @@ parse_query_8_formats_test() ->
 %% normalize_module tests
 %% =============================================================================
 
-normalize_gpio_test() ->
-    ?assertEqual(
-        <<"GPIO">>,
-        spectrometer_utils:normalize_module_name("GPIO")
-    ).
-
-normalize_elixir_gpio_test() ->
-    ?assertEqual(
-        <<"Elixir.GPIO">>,
-        spectrometer_utils:normalize_module_name("Elixir.GPIO")
-    ).
-
-normalize_lists_test() ->
+normalize_with_flag_test() ->
     ?assertEqual(
         <<"lists">>,
-        spectrometer_utils:normalize_module_name("lists")
-    ).
-
-normalize_with_flag_test() ->
+        spectrometer_utils:normalize_module_name("lists", false)
+    ),
     ?assertEqual(
         <<"Elixir.GPIO">>,
         spectrometer_utils:normalize_module_name("GPIO", true)
@@ -80,9 +66,11 @@ is_elixir_module_name_elxir_prefix_test() ->
         true, spectrometer_utils:is_elixir_module_name("Elixir.MyModule")
     ).
 
-is_elixir_module_name_lowercase_test() ->
+is_elixir_module_name_case_test() ->
     ?assertEqual(false, spectrometer_utils:is_elixir_module_name("lists")),
     ?assertEqual(false, spectrometer_utils:is_elixir_module_name("maps")),
-    % Uppercase without Elixir prefix is no longer considered Elixir
-    ?assertEqual(false, spectrometer_utils:is_elixir_module_name("GPIO")),
-    ?assertEqual(false, spectrometer_utils:is_elixir_module_name("MyModule")).
+    ?assertEqual(true, spectrometer_utils:is_elixir_module_name("GPIO")),
+    ?assertEqual(true, spectrometer_utils:is_elixir_module_name("MyModule")),
+    % Binary inputs
+    ?assertEqual(true, spectrometer_utils:is_elixir_module_name(<<"GPIO">>)),
+    ?assertEqual(false, spectrometer_utils:is_elixir_module_name(<<"lists">>)).

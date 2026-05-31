@@ -455,6 +455,40 @@ parse_supported_args_short_module_test_() ->
         ?assertEqual(<<"maps">>, maps:get(module, Opts))
     end}.
 
+parse_supported_args_elxir_module_test_() ->
+    {"normalizes Elixir module names with prefix", fun() ->
+        % Capitalized module name should get Elixir. prefix
+        {command, supported, Opts1} = atomvm_spectrometer:parse_args([
+            "supported", "-m", "List"
+        ]),
+        ?assertEqual(<<"Elixir.List">>, maps:get(module, Opts1)),
+        % Already-prefixed module name stays as-is
+        {command, supported, Opts2} = atomvm_spectrometer:parse_args([
+            "supported", "-m", "Elixir.List"
+        ]),
+        ?assertEqual(<<"Elixir.List">>, maps:get(module, Opts2)),
+        % Erlang module name (lowercase) stays as-is
+        {command, supported, Opts3} = atomvm_spectrometer:parse_args([
+            "supported", "-m", "lists"
+        ]),
+        ?assertEqual(<<"lists">>, maps:get(module, Opts3)),
+        % Long form --module: Capitalized module name should get Elixir. prefix
+        {command, supported, Opts4} = atomvm_spectrometer:parse_args([
+            "supported", "--module", "List"
+        ]),
+        ?assertEqual(<<"Elixir.List">>, maps:get(module, Opts4)),
+        % Long form --module: Already-prefixed module name stays as-is
+        {command, supported, Opts5} = atomvm_spectrometer:parse_args([
+            "supported", "--module", "Elixir.List"
+        ]),
+        ?assertEqual(<<"Elixir.List">>, maps:get(module, Opts5)),
+        % Long form --module: Erlang module name (lowercase) stays as-is
+        {command, supported, Opts6} = atomvm_spectrometer:parse_args([
+            "supported", "--module", "lists"
+        ]),
+        ?assertEqual(<<"lists">>, maps:get(module, Opts6))
+    end}.
+
 parse_supported_args_erl_test_() ->
     {"parses --erl flag", fun() ->
         {command, supported, Opts} = atomvm_spectrometer:parse_args(

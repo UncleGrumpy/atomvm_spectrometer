@@ -361,28 +361,8 @@ start_applications_success_test_() ->
         ?_assertEqual(ok, spectrometer_utils:start_applications())}.
 
 %% =============================================================================
-%% normalize_module_name/1 and /2 tests
+%% normalize_module_name/2 tests
 %% =============================================================================
-
-normalize_module_name_string_test_() ->
-    {"normalizes string module name",
-        ?_assertEqual(
-            <<"Elixir.GPIO">>,
-            spectrometer_utils:normalize_module_name("Elixir.GPIO")
-        )}.
-
-normalize_module_name_atom_test_() ->
-    {"normalizes atom module name",
-        ?_assertEqual(
-            <<"Elixir.GPIO">>,
-            spectrometer_utils:normalize_module_name('Elixir.GPIO')
-        )}.
-
-normalize_module_name_non_elixir_atom_test_() ->
-    {"normalizes atom without Elixir prefix",
-        ?_assertEqual(
-            <<"lists">>, spectrometer_utils:normalize_module_name(lists)
-        )}.
 
 normalize_module_name_2_atom_test_() ->
     {"normalize_module_name/2 with atom and ElixirFlag=true",
