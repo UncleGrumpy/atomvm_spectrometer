@@ -57,9 +57,9 @@ user cache override may also be updated using
 -doc """
 List all modules supported by AtomVM.
 
-Returns a list of module atoms that appear in the supported functions database.
+Returns a list of module binaries that appear in the supported functions database.
 """.
--spec supported_modules() -> [atom()].
+-spec supported_modules() -> [binary()].
 supported_modules() ->
     maps:keys(load_db()).
 
@@ -71,13 +71,16 @@ otherwise. `Platforms` is the atom `all` or a list of platform atoms.
 `Since` is a binary version string (e.g. `<<"v0.5.0">>`) or
 `{unreleased, Branch :: binary()}` for functions not yet in a release.
 """.
--spec support_info({atom(), atom(), non_neg_integer()}) ->
+-spec support_info({atom() | binary(), atom() | binary(), non_neg_integer()}) ->
     {true, [atom()] | all, binary() | {unreleased, binary()}} | false.
 support_info({Mod, Fun, Arity}) ->
     DB = load_db(),
+    % Convert keys to binaries for DB lookup
+    BinMod = ensure_binary(Mod),
+    BinFun = ensure_binary(Fun),
     case DB of
-        #{Mod := Funs} ->
-            FunMatches = [E || E <- Funs, element(1, E) =:= Fun],
+        #{BinMod := Funs} ->
+            FunMatches = [E || E <- Funs, element(1, E) =:= BinFun],
             case find_arity(FunMatches, Arity) of
                 none -> false;
                 {Platforms, Since} -> {true, Platforms, Since}
@@ -91,12 +94,16 @@ Check if a function is supported
 
 Returns `boolean()`.
 """.
--spec is_supported({atom(), atom(), non_neg_integer()}) -> boolean().
+-spec is_supported({atom() | binary(), atom() | binary(), non_neg_integer()}) ->
+    boolean().
 is_supported({Mod, Fun, Arity}) ->
     DB = load_db(),
+    % Convert keys to binaries for DB lookup
+    BinMod = ensure_binary(Mod),
+    BinFun = ensure_binary(Fun),
     case DB of
-        #{Mod := Funs} ->
-            FunMatches = [E || E <- Funs, element(1, E) =:= Fun],
+        #{BinMod := Funs} ->
+            FunMatches = [E || E <- Funs, element(1, E) =:= BinFun],
             case find_arity(FunMatches, Arity) of
                 none -> false;
                 {_, _} -> true
@@ -144,8 +151,8 @@ for every function in the database.
 -spec get_supported_functions() ->
     [
         {
-            atom(),
-            atom(),
+            binary(),
+            binary(),
             non_neg_integer() | all | [non_neg_integer()],
             [atom()] | all,
             binary() | {unreleased, binary()}
@@ -166,9 +173,14 @@ Given a statistics map from a scan, returns a list of
 not supported by AtomVM, sorted by call count descending.
 """.
 -spec get_unsupported(#{
-    {atom(), atom(), non_neg_integer()} => non_neg_integer()
+    {atom() | binary(), atom() | binary(), non_neg_integer()} => non_neg_integer()
 }) ->
-    [{{atom(), atom(), non_neg_integer()}, non_neg_integer()}].
+    [
+        {
+            {atom() | binary(), atom() | binary(), non_neg_integer()},
+            non_neg_integer()
+        }
+    ].
 get_unsupported(Stats) ->
     Unsupported = maps:filter(
         fun(Key, _Count) ->
@@ -232,12 +244,20 @@ load_db_internal() ->
     end.
 
 -doc false.
+%% Convert key to binary for DB lookup. If already a binary, return as-is.
+-spec ensure_binary(atom() | binary()) -> binary().
+ensure_binary(Bin) when is_binary(Bin) ->
+    Bin;
+ensure_binary(Atom) when is_atom(Atom) ->
+    erlang:atom_to_binary(Atom, utf8).
+
+-doc false.
 %% Read a human-readable database file (list of tuples).
 -spec consult_db(file:name_all()) ->
     #{
-        atom() => [
+        binary() => [
             {
-                atom(),
+                binary(),
                 arity() | all | [arity()],
                 [atom()] | all,
                 binary() | {unreleased, binary()}
@@ -248,7 +268,23 @@ consult_db(Path) ->
     case file:consult(Path) of
         {ok, Data} ->
             try
-                maps:from_list(lists:flatten(Data))
+                % Convert atom keys to binaries for safety
+                AtomData = lists:flatten(Data),
+                BinaryData = lists:map(
+                    fun({Mod, Funs}) ->
+                        ModBin = ensure_binary(Mod),
+                        BinaryFuns = lists:map(
+                            fun({Fun, A, Platforms, Since}) ->
+                                FunBin = ensure_binary(Fun),
+                                {FunBin, A, Platforms, Since}
+                            end,
+                            Funs
+                        ),
+                        {ModBin, BinaryFuns}
+                    end,
+                    AtomData
+                ),
+                maps:from_list(BinaryData)
             catch
                 _:Reason ->
                     io:format(
@@ -293,42 +329,105 @@ query(Opts) ->
         {error, Reason} ->
             io:format(standard_error, "Error: ~s\n", [Reason]),
             io:format(
-                standard_error, "Usage: query Module:Function[/Arity]\n", []
+                standard_error,
+                "Usage: query Module:Function[/Arity] or Module.Function[/Arity]\n",
+                []
             ),
             {error, Reason}
     end.
 
 -doc """
-Parse a query string in `Module:Function[/Arity]` format.
+Parse a query string in `Module:Function[/Arity]` format, or `Module.Function[/Arity]` format for Elixir modules.
 
 Returns `{ok, Module, Function, Arity}` or `{ok, Module, Function}`
 when no arity is specified, or `{error, Reason}` on invalid input.
 """.
 -spec parse_query_string(string()) ->
-    {ok, atom(), atom(), arity()} | {ok, atom(), atom()} | {error, string()}.
+    {ok, binary(), binary(), arity()}
+    | {ok, binary(), binary()}
+    | {error, string()}.
 parse_query_string(Query) ->
+    % Try colon separator first (Erlang format)
     case string:split(Query, ":") of
-        [ModStr, Rest] ->
+        [ModStr, Rest] when ModStr =/= [] ->
+            % Strip "Elixir." prefix for colon-form queries (Erlang format)
+            StrippedModStr =
+                case ModStr of
+                    "Elixir." ++ RestMod -> RestMod;
+                    _ -> ModStr
+                end,
             case string:split(Rest, "/") of
-                [FunStr, ArityStr] ->
+                [FunStr, ArityStr] when FunStr =/= [] ->
                     case string:to_integer(ArityStr) of
                         {Arity, []} when Arity >= 0 ->
-                            {ok, spectrometer_utils:atom_from_string(ModStr),
-                                spectrometer_utils:atom_from_string(FunStr),
-                                Arity};
+                            ModBin =
+                                spectrometer_utils:normalize_module_name(
+                                    StrippedModStr, false
+                                ),
+                            FunBin =
+                                spectrometer_utils:string_to_binary(FunStr),
+                            {ok, ModBin, FunBin, Arity};
                         _ ->
                             {error, "Invalid arity: " ++ ArityStr}
                     end;
-                [FunStr] ->
-                    {ok, spectrometer_utils:atom_from_string(ModStr),
-                        spectrometer_utils:atom_from_string(FunStr)}
+                [FunStr] when FunStr =/= [] ->
+                    ModBin =
+                        spectrometer_utils:normalize_module_name(
+                            StrippedModStr, false
+                        ),
+                    FunBin = spectrometer_utils:string_to_binary(FunStr),
+                    {ok, ModBin, FunBin};
+                _ ->
+                    {error, "Empty function or invalid format"}
             end;
         _ ->
-            {error,
-                "Invalid format. Use Module:Function or Module:Function/Arity"}
+            % Try dot separator for Elixir format (Module.Function[/Arity])
+            % Split on the last dot to separate module from function
+            case string:split(Query, ".", trailing) of
+                [ModStr, Rest] ->
+                    case ModStr =/= [] andalso Rest =/= [] of
+                        true ->
+                            case string:split(Rest, "/") of
+                                [FunStr, ArityStr] when FunStr =/= [] ->
+                                    case string:to_integer(ArityStr) of
+                                        {Arity, []} when Arity >= 0 ->
+                                            ModBin =
+                                                spectrometer_utils:normalize_module_name(
+                                                    ModStr, true
+                                                ),
+                                            FunBin =
+                                                spectrometer_utils:string_to_binary(
+                                                    FunStr
+                                                ),
+                                            {ok, ModBin, FunBin, Arity};
+                                        _ ->
+                                            {error,
+                                                "Invalid arity: " ++ ArityStr}
+                                    end;
+                                [FunStr] when FunStr =/= [] ->
+                                    ModBin =
+                                        spectrometer_utils:normalize_module_name(
+                                            ModStr, true
+                                        ),
+                                    FunBin =
+                                        spectrometer_utils:string_to_binary(
+                                            FunStr
+                                        ),
+                                    {ok, ModBin, FunBin};
+                                _ ->
+                                    {error, "Empty function or invalid format"}
+                            end;
+                        false ->
+                            {error, "Empty module or function"}
+                    end;
+                _ ->
+                    {error,
+                        "Invalid format. Use Module:Function, Module.Function, "
+                        "Module:Function/Arity, or Module.Function/Arity"}
+            end
     end.
 
--spec show_query({atom(), atom()} | {atom(), atom(), arity()}) -> ok.
+-spec show_query({binary(), binary()} | {binary(), binary(), arity()}) -> ok.
 show_query({Mod, Fun}) ->
     Supported = get_supported_functions(),
     Matches = [
@@ -415,63 +514,68 @@ report_supported(Opts) ->
         #{} ->
             ok
     end,
+    Filter = maps:get(filter, Opts, undefined),
     case Opts of
         #{module := Mod} ->
-            print_supported(Mod);
+            print_supported(Mod, Filter);
         #{} ->
-            print_supported()
+            print_supported(Filter)
     end.
 
--spec print_supported() -> ok.
-print_supported() ->
+-spec print_supported(atom() | undefined) -> ok.
+print_supported(Filter) ->
     Mods = supported_modules(),
-    io:format("AtomVM supported OTP modules (~p total):\n\n", [length(Mods)]),
+    FilteredMods = filter_modules_by_type(Mods, Filter),
+    io:format("AtomVM supported OTP modules (~p total):\n\n", [
+        length(FilteredMods)
+    ]),
     lists:foreach(
-        fun print_supported/1,
-        lists:sort(Mods)
+        fun(Mod) -> print_supported(Mod, Filter) end,
+        lists:sort(FilteredMods)
     ).
 
--spec print_supported(atom()) -> ok | {error, unsupported}.
-print_supported(Mod) ->
+-spec print_supported(binary(), atom() | undefined) ->
+    ok | {error, unsupported}.
+print_supported(Mod, Filter) ->
+    % Validate filter matches module type
+    case Filter of
+        elixir_only ->
+            case spectrometer_utils:is_elixir_module_name(Mod) of
+                false ->
+                    io:format(
+                        standard_error,
+                        "Module ~ts is not an Elixir module (filter: --ex)\n",
+                        [format_mod_name(Mod)]
+                    ),
+                    {error, unsupported};
+                true ->
+                    do_print_supported(Mod)
+            end;
+        erlang_only ->
+            case spectrometer_utils:is_elixir_module_name(Mod) of
+                true ->
+                    io:format(
+                        standard_error,
+                        "Module ~ts is not an Erlang module (filter: --erl)\n",
+                        [format_mod_name(Mod)]
+                    ),
+                    {error, unsupported};
+                false ->
+                    do_print_supported(Mod)
+            end;
+        undefined ->
+            do_print_supported(Mod)
+    end.
+
+do_print_supported(Mod) ->
     case supported_db_lookup(Mod) of
         {ok, Funs} ->
-            io:format("~ts (~p functions):\n", [atom_to_list(Mod), length(Funs)]),
+            io:format("~ts (~p functions):\n", [
+                format_mod_name(Mod), length(Funs)
+            ]),
             lists:foreach(
                 fun({F, A, Platform, Since}) ->
-                    case A of
-                        all ->
-                            io:format(
-                                "  ~ts/*  (all arities, ~s since: ~s)\n",
-                                [
-                                    atom_to_list(F),
-                                    format_platforms(Platform),
-                                    format_since(Since)
-                                ]
-                            );
-                        List when is_list(List) ->
-                            ArityStr = string:join(
-                                [integer_to_list(X) || X <- List], "/"
-                            ),
-                            io:format(
-                                "  ~ts/~s  (~s since: ~s)\n",
-                                [
-                                    atom_to_list(F),
-                                    ArityStr,
-                                    format_platforms(Platform),
-                                    format_since(Since)
-                                ]
-                            );
-                        Int when is_integer(Int) ->
-                            io:format(
-                                "  ~ts/~p  (~s since: ~s)\n",
-                                [
-                                    atom_to_list(F),
-                                    Int,
-                                    format_platforms(Platform),
-                                    format_since(Since)
-                                ]
-                            )
-                    end
+                    format_function_line(F, A, Platform, Since)
                 end,
                 lists:sort(Funs)
             ),
@@ -480,15 +584,27 @@ print_supported(Mod) ->
             io:format(
                 standard_error,
                 "Module ~ts not found in AtomVM supported database\n",
-                [atom_to_list(Mod)]
+                [format_mod_name(Mod)]
             ),
             {error, unsupported}
     end.
 
--spec supported_db_lookup(atom()) ->
+-spec filter_modules_by_type([binary()], atom() | undefined) -> [binary()].
+filter_modules_by_type(Mods, erlang_only) ->
+    lists:filter(
+        fun(Mod) -> not spectrometer_utils:is_elixir_module_name(Mod) end, Mods
+    );
+filter_modules_by_type(Mods, elixir_only) ->
+    lists:filter(
+        fun(Mod) -> spectrometer_utils:is_elixir_module_name(Mod) end, Mods
+    );
+filter_modules_by_type(Mods, undefined) ->
+    Mods.
+
+-spec supported_db_lookup(binary()) ->
     {ok, [
         {
-            atom(),
+            binary(),
             arity() | all | [arity()],
             [atom()] | all,
             binary() | {unreleased, binary()}
@@ -502,20 +618,61 @@ supported_db_lookup(Mod) ->
             {F, A, Platforms, Since}
          || {M, F, A, Platforms, Since} <- Supported, M =:= Mod
         ],
-    %  ++
-    %     %% Also support entries without module prefix (for test compatibility)
-    %     [
-    %         {F, A, Since}
-    %      || {F, A, _Platforms, Since} <- Supported, F =:= Mod
-    %     ] ++
-    %     %% Also support entries in format {F, A, Platforms, Since} (without module)
-    %     [
-    %         {F, A, Since}
-    %      || {F, A, Platforms, Since} <- Supported,
-    %         is_list(Platforms),
-    %         F =:= Mod
-    %     ],
     case ModFuns of
         [] -> not_found;
         _ -> {ok, ModFuns}
     end.
+
+%% Format a single function line for output
+-spec format_function_line(
+    atom() | binary(),
+    arity() | all | [arity()],
+    [atom()] | all,
+    binary() | {unreleased, binary()}
+) -> ok.
+format_function_line(Fun, all, Platform, Since) ->
+    FunStr = format_fun_name(Fun),
+    io:format(
+        "  ~ts/*  (~s since: ~s)\n",
+        [
+            FunStr,
+            format_platforms(Platform),
+            format_since(Since)
+        ]
+    );
+format_function_line(Fun, Arity, Platform, Since) when is_integer(Arity) ->
+    FunStr = format_fun_name(Fun),
+    ArityStr = integer_to_list(Arity),
+    io:format(
+        "  ~ts/~s  (~s since: ~s)\n",
+        [
+            FunStr,
+            ArityStr,
+            format_platforms(Platform),
+            format_since(Since)
+        ]
+    );
+format_function_line(Fun, ArityList, Platform, Since) when is_list(ArityList) ->
+    FunStr = format_fun_name(Fun),
+    ArityStr = string:join([integer_to_list(X) || X <- ArityList], "/"),
+    io:format(
+        "  ~ts/~s  (~s since: ~s)\n",
+        [
+            FunStr,
+            ArityStr,
+            format_platforms(Platform),
+            format_since(Since)
+        ]
+    ).
+
+-spec format_fun_name(atom() | binary()) -> string().
+format_fun_name(Fun) when is_atom(Fun) ->
+    atom_to_list(Fun);
+format_fun_name(Fun) when is_binary(Fun) ->
+    binary_to_list(Fun).
+
+-spec format_mod_name(atom() | binary()) -> string().
+format_mod_name(Mod) when is_atom(Mod) ->
+    atom_to_list(Mod);
+format_mod_name(Mod) when is_binary(Mod) ->
+    binary_to_list(Mod).

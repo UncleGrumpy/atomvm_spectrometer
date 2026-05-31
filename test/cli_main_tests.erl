@@ -177,30 +177,30 @@ main_query_supported_with_arity_test_() ->
         end}.
 
 main_query_unsupported_test_() ->
-    {"main(['query', 'lists:nonexistent_func']) returns ok, shows unsupported",
+    {"main(['query', 'lists:nonexistent_func']) returns ok with message for unknown function",
         fun() ->
-            ?assertEqual(
+            ?assertMatch(
                 ok,
                 atomvm_spectrometer:main(["query", "lists:nonexistent_func"])
             )
         end}.
 
 main_query_unknown_mod_function_test_() ->
-    {"main(['query', 'nonexistent_mod:func']) returns ok, shows unsupported",
+    {"main(['query', 'nonexistent_mod:func']) returns ok with message for unknown module",
         fun() ->
-            ?assertEqual(
-                ok,
-                atomvm_spectrometer:main(["query", "nonexistent_mod:func"])
+            ?assertMatch(
+                ok, atomvm_spectrometer:main(["query", "nonexistent_mod:func"])
             )
         end}.
 
 main_query_invalid_format_test_() ->
-    {"main(['query', 'invalid_format']) returns error", fun() ->
-        ?assertMatch(
-            {error, {halt, 1}},
-            atomvm_spectrometer:main(["query", "invalid_format"])
-        )
-    end}.
+    {"main(['query', 'invalid_format']) returns error for invalid format",
+        fun() ->
+            ?assertMatch(
+                {error, {halt, 1}},
+                atomvm_spectrometer:main(["query", "invalid_format"])
+            )
+        end}.
 
 main_query_invalid_arity_test_() ->
     {"main(['query', 'lists:map/abc']) returns error", fun() ->

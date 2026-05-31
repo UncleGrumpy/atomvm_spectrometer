@@ -6,6 +6,7 @@
 %%
 %% SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
 %% SPDX-License-Identifier: Apache-2.0
+%%
 
 -module(spectrometer_scanner).
 
@@ -17,8 +18,9 @@ discovers `.erl` files in a directory tree (skipping symlinks), parses them
 using `epp_dodger` and `erl_syntax_lib` for robust handling of malformed
 source code, and extracts `Module:Function/Arity` call statistics.
 
-The result is a map from `{Module, Function, Arity}` tuples to call counts,
-which is consumed by the analyzer and reporter modules.
+The result is a map from `{<<"Module">>, <<"Function">>, Arity}` binary tuple
+keys to call counts, which is consumed by the analyzer and reporter modules.
+Binary keys prevent atom table exhaustion when scanning large ecosystems.
 """.
 
 -export([scan_directory/1, parse_calls/1]).
@@ -33,18 +35,18 @@ loops. For each `.erl` file found, parses the source and extracts all
 `Module:Function(...)` calls and `fun Module:Function/Arity` references.
 BIF calls (e.g. `length/1`) are attributed to the `erlang` module.
 
-Returns a map where keys are `{Module, Function, Arity}` tuples and values
-are the number of times that function was called across all files.
+Returns a map where keys are `{<<"Module">>, <<"Function">>, Arity}` binary tuples
+and values are the number of times that function was called across all files.
 
 #### Example
 
 ```erlang
 1> spectrometer_scanner:scan_directory("/path/to/project").
-#{{lists,map,2} => 42, {io,format,2} => 17, ...}
+#{<<"lists",map,2>> => 42, <<"io",format,2>> => 17, ...}
 ```
 """.
 -spec scan_directory(Dir :: string()) ->
-    #{{module(), atom(), non_neg_integer()} => non_neg_integer()}.
+    #{{binary(), binary(), non_neg_integer()} => non_neg_integer()}.
 scan_directory(Dir) ->
     ErlFiles = find_erl_files(Dir),
     lists:foldl(
@@ -100,7 +102,7 @@ find_erl_files(Dir, Acc) ->
 
 -doc false.
 %% Parse a single .erl file using epp_dodger for robust parsing.
-%% Returns {ok, Calls} where Calls is a map of {Mod,Fun,Arity} => Count,
+%% Returns {ok, Calls} where Calls is a map of {ModBin,FunBin,Arity} => Count,
 %% or {error, Reason} on failure.
 parse_file(File) ->
     try
@@ -123,7 +125,11 @@ parse_file(File) ->
 -doc false.
 %% Parse an Erlang file and return module name with external function calls.
 %% Returns {ok, ModuleName, Calls} or {error, Reason}.
-%% Calls is a map from {Module, Function, Arity} to call count.
+%% Calls is a map from {<<"Module">>, <<"Function">>, Arity} to call count.
+%% ModuleName is returned as binary for consistency.
+-spec parse_calls(string()) ->
+    {ok, binary() | undefined, map()}
+    | {error, term()}.
 parse_calls(File) ->
     try
         case epp_dodger:parse_file(File) of
@@ -140,6 +146,7 @@ parse_calls(File) ->
 
 -doc false.
 %% Extract the module name from parsed forms.
+%% Returns binary module name for consistency with scanner output format.
 extract_module_name(Forms) ->
     extract_module_name(Forms, undefined).
 
@@ -153,8 +160,12 @@ extract_module_name([Form | Rest], _Acc) ->
                     case erl_syntax:attribute_arguments(Form) of
                         [ModArg] ->
                             case erl_syntax:type(ModArg) of
-                                atom -> erl_syntax:atom_value(ModArg);
-                                _ -> extract_module_name(Rest, undefined)
+                                atom ->
+                                    atom_to_binary(
+                                        erl_syntax:atom_value(ModArg), utf8
+                                    );
+                                _ ->
+                                    extract_module_name(Rest, undefined)
                             end;
                         _ ->
                             extract_module_name(Rest, undefined)
@@ -204,12 +215,13 @@ extract_application_filtered(Node, Acc, FilterMod) ->
                 {atom, atom} ->
                     Mod = erl_syntax:atom_value(ModNode),
                     Fun = erl_syntax:atom_value(FunNode),
+                    ModBin = atom_to_binary(Mod, utf8),
                     % Skip calls to the same module being tested
-                    case Mod =:= FilterMod of
+                    case ModBin =:= FilterMod of
                         true ->
                             Acc;
                         false ->
-                            Key = {Mod, Fun, Arity},
+                            Key = {ModBin, atom_to_binary(Fun, utf8), Arity},
                             maps:update_with(Key, fun(V) -> V + 1 end, 1, Acc)
                     end;
                 _ ->
@@ -219,7 +231,7 @@ extract_application_filtered(Node, Acc, FilterMod) ->
             Fun = erl_syntax:atom_value(Op),
             case erl_internal:bif(Fun, Arity) of
                 true ->
-                    Key = {erlang, Fun, Arity},
+                    Key = {<<"erlang">>, atom_to_binary(Fun, utf8), Arity},
                     maps:update_with(Key, fun(V) -> V + 1 end, 1, Acc);
                 false ->
                     Acc
@@ -260,7 +272,11 @@ extract_application_call(Node, Acc) ->
                 {atom, atom} ->
                     Mod = erl_syntax:atom_value(ModNode),
                     Fun = erl_syntax:atom_value(FunNode),
-                    Key = {Mod, Fun, Arity},
+                    Key = {
+                        atom_to_binary(Mod, utf8),
+                        atom_to_binary(Fun, utf8),
+                        Arity
+                    },
                     maps:update_with(Key, fun(V) -> V + 1 end, 1, Acc);
                 _ ->
                     Acc
@@ -269,7 +285,7 @@ extract_application_call(Node, Acc) ->
             Fun = erl_syntax:atom_value(Op),
             case erl_internal:bif(Fun, Arity) of
                 true ->
-                    Key = {erlang, Fun, Arity},
+                    Key = {<<"erlang">>, atom_to_binary(Fun, utf8), Arity},
                     maps:update_with(Key, fun(V) -> V + 1 end, 1, Acc);
                 false ->
                     Acc
@@ -301,7 +317,11 @@ extract_implicit_fun(Node, Acc) ->
                             Mod = erl_syntax:atom_value(ModNode),
                             Fun = erl_syntax:atom_value(FunNode),
                             Arity = erl_syntax:integer_value(ArityNode),
-                            Key = {Mod, Fun, Arity},
+                            Key = {
+                                atom_to_binary(Mod, utf8),
+                                atom_to_binary(Fun, utf8),
+                                Arity
+                            },
                             maps:update_with(Key, fun(V) -> V + 1 end, 1, Acc);
                         _ ->
                             Acc
@@ -337,12 +357,15 @@ extract_implicit_fun(Node, Acc, FilterMod) ->
                             Mod = erl_syntax:atom_value(ModNode),
                             Fun = erl_syntax:atom_value(FunNode),
                             Arity = erl_syntax:integer_value(ArityNode),
+                            ModBin = atom_to_binary(Mod, utf8),
                             % Skip references to the same module being tested
-                            case Mod =:= FilterMod of
+                            case ModBin =:= FilterMod of
                                 true ->
                                     Acc;
                                 false ->
-                                    Key = {Mod, Fun, Arity},
+                                    Key =
+                                        {ModBin, atom_to_binary(Fun, utf8),
+                                            Arity},
                                     maps:update_with(
                                         Key, fun(V) -> V + 1 end, 1, Acc
                                     )

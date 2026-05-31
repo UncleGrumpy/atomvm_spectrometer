@@ -23,7 +23,7 @@
     work => [work_item()],
     scanned => sets:set(map()),
     stats => #{
-        {atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}
+        {binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}
     },
     total_processed => non_neg_integer(),
     total_work => non_neg_integer(),
@@ -147,11 +147,13 @@ work_key(hex, #{name := Name}) -> "hex:" ++ Name.
 -spec run_coordinator(
     [work_item()],
     sets:set(map()),
-    #{{atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}},
+    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}},
     non_neg_integer(),
     atomvm_spectrometer:opts_map()
 ) ->
-    {ok, #{{atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}}}
+    {ok, #{
+        {binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}
+    }}
     | {error, term()}.
 run_coordinator(Work, Scanned, Stats, TotalProcessed, Opts) ->
     NumWorkers = maps:get(workers, Opts),
@@ -336,7 +338,7 @@ worker_loop(CoordPid) ->
     end.
 
 -spec process_github_repo(map()) ->
-    #{{atom(), atom(), arity()} => non_neg_integer()}.
+    #{{binary(), binary(), arity()} => non_neg_integer()}.
 process_github_repo(Repo) ->
     CloneUrl = maps:get(clone_url, Repo),
     TmpDir = spectrometer_utils:make_temp_dir("gh_"),
@@ -362,7 +364,7 @@ process_github_repo(Repo) ->
     end.
 
 -spec process_hex_package(map()) ->
-    #{{atom(), atom(), arity()} => non_neg_integer()}.
+    #{{binary(), binary(), arity()} => non_neg_integer()}.
 process_hex_package(Package) ->
     Name = maps:get(name, Package),
     Version = maps:get(version, Package),
@@ -383,10 +385,10 @@ Merge a single repo's scan statistics into the global ecosystem accumulator.
 Each entry in `GlobalStats` tracks `{TotalCalls, RepoCount}`.
 """.
 -spec merge_repo_stats(
-    #{{atom(), atom(), arity()} => non_neg_integer()},
-    #{{atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}}
+    #{{binary(), binary(), arity()} => non_neg_integer()},
+    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}}
 ) ->
-    #{{atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}}.
+    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}}.
 merge_repo_stats(RepoStats, GlobalStats) ->
     maps:fold(
         fun(Key, CallCount, Acc) ->
@@ -403,7 +405,7 @@ merge_repo_stats(RepoStats, GlobalStats) ->
 
 -spec save_state(
     sets:set(map()),
-    #{{atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}},
+    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}},
     non_neg_integer()
 ) -> ok | {error, term()}.
 save_state(Scanned, Stats, TotalProcessed) ->
@@ -435,7 +437,11 @@ save_state(Scanned, Stats, TotalProcessed) ->
 -spec load_state() ->
     {
         sets:set(map()),
-        #{{atom(), atom(), arity()} => {non_neg_integer(), non_neg_integer()}},
+        #{
+            {binary(), binary(), arity()} => {
+                non_neg_integer(), non_neg_integer()
+            }
+        },
         non_neg_integer()
     }.
 load_state() ->

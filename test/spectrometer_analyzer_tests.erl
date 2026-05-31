@@ -6,7 +6,7 @@
 %%
 %% SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
 %% SPDX-License-Identifier: Apache-2.0
-
+%%
 -module(spectrometer_analyzer_tests).
 -include_lib("eunit/include/eunit.hrl").
 
@@ -23,7 +23,7 @@ scan_local_dir_test_() ->
             ok = file:write_file(filename:join(Dir, "test.erl"), Source),
             Stats = spectrometer_analyzer:scan_target({local_dir, Dir}),
             ?assert(is_map(Stats)),
-            ?assert(maps:is_key({lists, map, 2}, Stats))
+            ?assert(maps:is_key({<<"lists">>, <<"map">>, 2}, Stats))
         after
             spectrometer_utils:purge_dir(Dir)
         end
@@ -60,26 +60,30 @@ scan_local_dir_nonexistent_test_() ->
 
 merge_stats_basic_test_() ->
     {"merges two stats maps", fun() ->
-        Stats1 = #{{lists, map, 2} => 10, {io, format, 2} => 5},
-        Stats2 = #{{lists, map, 2} => 3, {string, len, 1} => 7},
+        Stats1 = #{
+            {<<"lists">>, <<"map">>, 2} => 10, {<<"io">>, <<"format">>, 2} => 5
+        },
+        Stats2 = #{
+            {<<"lists">>, <<"map">>, 2} => 3, {<<"string">>, <<"len">>, 1} => 7
+        },
         Result = spectrometer_analyzer:merge_stats(Stats1, Stats2),
-        ?assertEqual(13, maps:get({lists, map, 2}, Result)),
-        ?assertEqual(5, maps:get({io, format, 2}, Result)),
-        ?assertEqual(7, maps:get({string, len, 1}, Result))
+        ?assertEqual(13, maps:get({<<"lists">>, <<"map">>, 2}, Result)),
+        ?assertEqual(5, maps:get({<<"io">>, <<"format">>, 2}, Result)),
+        ?assertEqual(7, maps:get({<<"string">>, <<"len">>, 1}, Result))
     end}.
 
 merge_stats_sums_test_() ->
     {"sums counts for duplicate keys", fun() ->
-        Stats1 = #{{lists, map, 2} => 5},
-        Stats2 = #{{lists, map, 2} => 10},
+        Stats1 = #{{<<"lists">>, <<"map">>, 2} => 5},
+        Stats2 = #{{<<"lists">>, <<"map">>, 2} => 10},
         Result = spectrometer_analyzer:merge_stats(Stats1, Stats2),
-        ?assertEqual(15, maps:get({lists, map, 2}, Result))
+        ?assertEqual(15, maps:get({<<"lists">>, <<"map">>, 2}, Result))
     end}.
 
 merge_stats_unique_test_() ->
     {"preserves unique keys from both maps", fun() ->
-        Stats1 = #{{lists, map, 2} => 5},
-        Stats2 = #{{io, format, 2} => 3},
+        Stats1 = #{{<<"lists">>, <<"map">>, 2} => 5},
+        Stats2 = #{{<<"io">>, <<"format">>, 2} => 3},
         Result = spectrometer_analyzer:merge_stats(Stats1, Stats2),
         ?assertEqual(2, maps:size(Result))
     end}.
@@ -87,14 +91,14 @@ merge_stats_unique_test_() ->
 merge_stats_empty_left_test_() ->
     {"handles empty left map", fun() ->
         Stats1 = #{},
-        Stats2 = #{{lists, map, 2} => 5},
+        Stats2 = #{{<<"lists">>, <<"map">>, 2} => 5},
         Result = spectrometer_analyzer:merge_stats(Stats1, Stats2),
         ?assertEqual(1, maps:size(Result))
     end}.
 
 merge_stats_empty_right_test_() ->
     {"handles empty right map", fun() ->
-        Stats1 = #{{lists, map, 2} => 5},
+        Stats1 = #{{<<"lists">>, <<"map">>, 2} => 5},
         Stats2 = #{},
         Result = spectrometer_analyzer:merge_stats(Stats1, Stats2),
         ?assertEqual(1, maps:size(Result))
@@ -110,8 +114,10 @@ merge_stats_both_empty_test_() ->
 
 merge_stats_order_independent_test_() ->
     {"order-independent merging", fun() ->
-        Stats1 = #{{lists, map, 2} => 5, {io, format, 2} => 3},
-        Stats2 = #{{lists, map, 2} => 10},
+        Stats1 = #{
+            {<<"lists">>, <<"map">>, 2} => 5, {<<"io">>, <<"format">>, 2} => 3
+        },
+        Stats2 = #{{<<"lists">>, <<"map">>, 2} => 10},
         Result1 = spectrometer_analyzer:merge_stats(Stats1, Stats2),
         Result2 = spectrometer_analyzer:merge_stats(Stats2, Stats1),
         ?assertEqual(Result1, Result2)
@@ -132,8 +138,10 @@ scan_target_github_url_test_() ->
                 ?assert(is_map(Stats)),
                 %% Should return non-empty map for a real Erlang repo
                 ?assert(map_size(Stats) > 0),
-                ?assert(maps:is_key({io, format, 1}, Stats)),
-                ?assert(maps:is_key({proplists, get_value, 2}, Stats))
+                ?assert(maps:is_key({<<"io">>, <<"format">>, 1}, Stats)),
+                ?assert(
+                    maps:is_key({<<"proplists">>, <<"get_value">>, 2}, Stats)
+                )
             end};
         _ ->
             {"skipped (network tests disabled)", fun() -> ok end}
@@ -165,8 +173,8 @@ scan_target_hex_package_test_() ->
                 ?assert(is_map(Stats)),
                 %% Verify we found some function calls (specific keys may change)
                 ?assert(maps:size(Stats) > 0),
-                ?assert(maps:is_key({lists, member, 2}, Stats)),
-                ?assert(maps:is_key({erlang, is_map, 1}, Stats))
+                ?assert(maps:is_key({<<"lists">>, <<"member">>, 2}, Stats)),
+                ?assert(maps:is_key({<<"erlang">>, <<"is_map">>, 1}, Stats))
             end};
         _ ->
             {"skipped (network tests disabled)", fun() -> ok end}

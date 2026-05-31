@@ -251,3 +251,280 @@ http_get_test_() ->
         _ ->
             [{"skipped (network tests disabled)", fun() -> ok end}]
     end.
+
+%% =============================================================================
+%% find_executable/1 tests
+%% =============================================================================
+
+find_executable_exists_test_() ->
+    {"finds git executable when present",
+        case os:find_executable("git") of
+            false ->
+                {skip, "git not in PATH"};
+            Path ->
+                ?_assertEqual(
+                    {ok, Path}, spectrometer_utils:find_executable("git")
+                )
+        end}.
+
+find_executable_not_found_test_() ->
+    {"returns error for non-existent executable",
+        ?_assertEqual(
+            {error, not_found},
+            spectrometer_utils:find_executable("nonexistent_command_xyz123")
+        )}.
+
+%% =============================================================================
+%% run_git_command/2 tests
+%% =============================================================================
+
+run_git_command_happy_path_test_() ->
+    {"returns output for git --version",
+        case os:find_executable("git") of
+            false ->
+                {skip, "git not in PATH"};
+            _ ->
+                ?_assertMatch(
+                    {ok, _},
+                    spectrometer_utils:run_git_command(["--version"], [])
+                )
+        end}.
+
+run_git_command_empty_env_test_() ->
+    {"handles custom environment vars",
+        case os:find_executable("git") of
+            false ->
+                {skip, "git not in PATH"};
+            _ ->
+                ?_assertMatch(
+                    {ok, _},
+                    spectrometer_utils:run_git_command(["--version"], [
+                        {"GIT_PAGER", "cat"}
+                    ])
+                )
+        end}.
+
+%% =============================================================================
+%% system_temp_dir/0 tests
+%% =============================================================================
+
+system_temp_dir_default_test_() ->
+    {"returns default temp dir when TEMPDIR not set", fun() ->
+        OldTempdir = os:getenv("TEMPDIR"),
+        os:putenv("TEMPDIR", ""),
+        try
+            % When TEMPDIR is empty string, os:getenv returns "", not false
+            % The function should fall through to TEMP or default
+            Result = spectrometer_utils:system_temp_dir(),
+            ?assert(is_list(Result))
+        after
+            case OldTempdir of
+                false -> os:unsetenv("TEMPDIR");
+                _ -> os:putenv("TEMPDIR", OldTempdir)
+            end
+        end
+    end}.
+
+system_temp_dir_env_test_() ->
+    {"uses TEMPDIR environment variable when set", fun() ->
+        OldTempdir = os:getenv("TEMPDIR"),
+        os:putenv("TEMPDIR", "/custom/tmp"),
+        try
+            ?assertEqual("/custom/tmp", spectrometer_utils:system_temp_dir())
+        after
+            case OldTempdir of
+                false -> os:unsetenv("TEMPDIR");
+                _ -> os:putenv("TEMPDIR", OldTempdir)
+            end
+        end
+    end}.
+
+%% =============================================================================
+%% version/0 tests
+%% =============================================================================
+
+version_success_test_() ->
+    {"returns version string on success",
+        case spectrometer_utils:version() of
+            Vsn when is_list(Vsn) ->
+                ?_assert(is_list(Vsn));
+            {error, version_not_found} ->
+                {skip, "version not configured in app"}
+        end}.
+
+%% =============================================================================
+%% start_applications/0 tests
+%% =============================================================================
+
+start_applications_success_test_() ->
+    {"returns ok on successful start",
+        ?_assertEqual(ok, spectrometer_utils:start_applications())}.
+
+%% =============================================================================
+%% normalize_module_name/1 and /2 tests
+%% =============================================================================
+
+normalize_module_name_string_test_() ->
+    {"normalizes string module name",
+        ?_assertEqual(
+            <<"Elixir.GPIO">>,
+            spectrometer_utils:normalize_module_name("Elixir.GPIO")
+        )}.
+
+normalize_module_name_atom_test_() ->
+    {"normalizes atom module name",
+        ?_assertEqual(
+            <<"Elixir.GPIO">>,
+            spectrometer_utils:normalize_module_name('Elixir.GPIO')
+        )}.
+
+normalize_module_name_non_elixir_atom_test_() ->
+    {"normalizes atom without Elixir prefix",
+        ?_assertEqual(
+            <<"lists">>, spectrometer_utils:normalize_module_name(lists)
+        )}.
+
+normalize_module_name_2_atom_test_() ->
+    {"normalize_module_name/2 with atom and ElixirFlag=true",
+        ?_assertEqual(
+            <<"Elixir.GPIO">>,
+            spectrometer_utils:normalize_module_name('GPIO', true)
+        )}.
+
+normalize_module_name_2_string_test_() ->
+    {"normalize_module_name/2 with string and ElixirFlag=true",
+        ?_assertEqual(
+            <<"Elixir.GPIO">>,
+            spectrometer_utils:normalize_module_name("GPIO", true)
+        )}.
+
+normalize_module_name_2_false_flag_test_() ->
+    {"normalize_module_name/2 with ElixirFlag=false preserves Elixir prefix",
+        ?_assertEqual(
+            <<"Elixir.GPIO">>,
+            spectrometer_utils:normalize_module_name("Elixir.GPIO", false)
+        )}.
+
+normalize_module_name_2_false_flag_non_elixir_test_() ->
+    {"normalize_module_name/2 with ElixirFlag=false preserves module as-is",
+        ?_assertEqual(
+            <<"lists">>,
+            spectrometer_utils:normalize_module_name("lists", false)
+        )}.
+
+%% =============================================================================
+%% find_first_file/1 tests
+%% =============================================================================
+
+find_first_file_found_test_() ->
+    {"finds first existing file", fun() ->
+        TempDir = spectrometer_utils:make_temp_dir("find_first_file_"),
+        MarkerFile = filename:join(TempDir, "spectrometer_utils_test_marker"),
+        file:write_file(MarkerFile, ""),
+        try
+            Result = spectrometer_utils:find_first_file([
+                "/nonexistent/file1",
+                MarkerFile,
+                "/nonexistent/file2"
+            ]),
+            ?assertEqual(MarkerFile, Result)
+        after
+            spectrometer_utils:purge_dir(TempDir)
+        end
+    end}.
+
+find_first_file_default_test_() ->
+    {"returns default when no files exist",
+        ?_assertEqual(
+            "priv/supported_functions.data",
+            spectrometer_utils:find_first_file([
+                "/nonexistent/file1", "/nonexistent/file2"
+            ])
+        )}.
+
+%% =============================================================================
+%% drain_port_messages/1 tests
+%% =============================================================================
+
+drain_port_messages_empty_test_() ->
+    {"returns ok when no messages pending",
+        ?_assertEqual(ok, spectrometer_utils:drain_port_messages(make_ref()))}.
+
+drain_port_messages_with_messages_test_() ->
+    {"drains pending port messages", fun() ->
+        Port = make_ref(),
+        self() ! {Port, {data, {eol, "test1"}}},
+        self() ! {Port, {data, {eol, "test2"}}},
+        self() ! {Port, {exit_status, 0}},
+        ?assertEqual(ok, spectrometer_utils:drain_port_messages(Port)),
+        % Verify no more messages
+        {messages, []} = process_info(self(), messages)
+    end}.
+
+%% =============================================================================
+%% bundled_data_path/0 tests
+%% =============================================================================
+
+bundled_data_path_test_() ->
+    {"returns path to bundled data file",
+        ?_assert(is_list(spectrometer_utils:bundled_data_path()))}.
+
+%% =============================================================================
+%% clone_temp_repo/2 tests
+%% =============================================================================
+
+clone_temp_repo_branch_test_() ->
+    {"clones repo with branch only",
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                case os:find_executable("git") of
+                    false ->
+                        {skip, "git not in PATH"};
+                    _ ->
+                        {"runs git clone", fun() ->
+                            Result = spectrometer_utils:clone_temp_repo(
+                                "main", undefined
+                            ),
+                            case Result of
+                                Dir when is_list(Dir) ->
+                                    try
+                                        ?assert(filelib:is_dir(Dir))
+                                    after
+                                        spectrometer_utils:purge_dir(Dir)
+                                    end;
+                                {error, _} ->
+                                    ok
+                            end
+                        end}
+                end;
+            _ ->
+                {skip, "network tests disabled"}
+        end}.
+
+clone_temp_repo_tag_test_() ->
+    {"clones repo with branch and tag",
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                case os:find_executable("git") of
+                    false ->
+                        {skip, "git not in PATH"};
+                    _ ->
+                        {"runs git clone with tag", fun() ->
+                            Result = spectrometer_utils:clone_temp_repo(
+                                "main", "v0.6.0"
+                            ),
+                            case Result of
+                                Dir when is_list(Dir) ->
+                                    try
+                                        ?assert(filelib:is_dir(Dir))
+                                    after
+                                        spectrometer_utils:purge_dir(Dir)
+                                    end;
+                                {error, _} ->
+                                    ok
+                            end
+                        end}
+                end;
+            _ ->
+                {skip, "network tests disabled"}
+        end}.

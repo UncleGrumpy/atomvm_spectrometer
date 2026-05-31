@@ -41,6 +41,7 @@ Version =
         {files, [
             "rebar.config{,.script}",
             "src/**/*.{hrl,erl,app.src}",
+            "include/*.hrl"
             "priv/supported_functions.data",
             "test/**/*.{hrl,erl}"
         ]}
@@ -102,7 +103,10 @@ Version =
                 {api_reference, true}
             ]}
         ]},
-        {check, [{erl_opts, [debug_info, {i, "include"}]}, {plugins, [erlfmt]}]},
+        {check, [
+            {erl_opts, [debug_info, {i, "include"}]},
+            {plugins, [erlfmt, rebar3_uncovered]}
+        ]},
         {prod, [
             {erl_opts, [debug_info, {i, "include"}, nowarn_sasl, {sasl, false}]}
         ]}
@@ -137,7 +141,7 @@ Version =
         ]}
     ]},
     {provider_hooks, [
-        {pre, [{release, escriptize}]}
+        {pre, [{release, escriptize}, {tar, escriptize}]}
     ]},
     {post_hooks, [
         {release,

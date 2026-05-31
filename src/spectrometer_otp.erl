@@ -18,12 +18,14 @@ This module contains functions for identifying OTP modules.
 -doc """
 Returns `true` if the module is an OTP module, otherwise `false`.
 """.
--spec is_otp_module(atom() | string()) -> boolean().
+-spec is_otp_module(atom() | string() | binary()) -> boolean().
 is_otp_module(Atom) when is_atom(Atom) ->
     is_otp_module(atom_to_list(Atom));
-is_otp_module(AtomStr) when is_list(AtomStr) ->
+is_otp_module(Str) when is_list(Str) ->
     OTPmods = modules_list(),
-    lists:member(AtomStr, OTPmods).
+    lists:member(Str, OTPmods);
+is_otp_module(Bin) when is_binary(Bin) ->
+    is_otp_module(binary_to_list(Bin)).
 
 -doc """
 Returns a list of module for the running OTP version.

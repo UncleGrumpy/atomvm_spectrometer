@@ -61,7 +61,7 @@ main(Args) ->
             spectrometer_help:usage(Cmd),
             maybe_halt(0);
         {command, audit, Opts} ->
-            case run_analyzer_dispatch(Opts, fun run_audit/1) of
+            case spectrometer_analyzer:audit(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -69,7 +69,7 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, ecosystem, Opts} ->
-            case run_ecosystem(Opts) of
+            case spectrometer_ecosystem:run(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -77,7 +77,7 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, examine, Opts} ->
-            case run_analyzer_dispatch(Opts, fun run_examine/1) of
+            case spectrometer_analyzer:examine(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -85,12 +85,12 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, supported, Opts} ->
-            case run_supported(Opts) of
+            case spectrometer_atomvm:report_supported(Opts) of
                 ok -> maybe_halt(0);
                 {error, _} -> maybe_halt(1)
             end;
         {command, filter, Opts} ->
-            case run_filter(Opts) of
+            case spectrometer_analyzer:filter(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
@@ -98,12 +98,12 @@ main(Args) ->
                     maybe_halt(1)
             end;
         {command, update, Opts} ->
-            case run_update(Opts) of
+            case spectrometer_updater:update(Opts) of
                 ok -> maybe_halt(0);
                 {error, _} -> maybe_halt(1)
             end;
         {command, query, Opts} ->
-            case run_query(Opts) of
+            case spectrometer_atomvm:query(Opts) of
                 ok -> maybe_halt(0);
                 {error, _} -> maybe_halt(1)
             end
@@ -159,7 +159,7 @@ parse_args(["audit" | Rest]) ->
 parse_args(["ecosystem" | Rest]) ->
     case lists:any(fun(E) -> lists:member(E, ["-h", "--help"]) end, Rest) of
         false ->
-            case parse_ecosystem_args(Rest, default_eccopts()) of
+            case parse_ecosystem_args(Rest, default_eco_opts()) of
                 {error, Msg} -> {error, Msg};
                 Opts when is_map(Opts) -> {command, ecosystem, Opts}
             end;
@@ -307,8 +307,8 @@ parse_audit_args(["--min-count", N | Rest], Opts) ->
 parse_audit_args([Unknown | _], _Opts) ->
     {error, "Unknown option: " ++ Unknown}.
 
--spec default_eccopts() -> opts_map().
-default_eccopts() ->
+-spec default_eco_opts() -> opts_map().
+default_eco_opts() ->
     #{
         workers => 4,
         github => true,
@@ -358,17 +358,19 @@ parse_ecosystem_args([Unknown | _], _Opts) ->
 parse_supported_args([], Opts) ->
     Opts;
 parse_supported_args(["--module", Mod | Rest], Opts) ->
-    parse_supported_args(Rest, Opts#{
-        module => spectrometer_utils:atom_from_string(Mod)
-    });
+    Bin = spectrometer_utils:normalize_module_name(Mod),
+    parse_supported_args(Rest, Opts#{module => Bin});
 parse_supported_args(["-m", Mod | Rest], Opts) ->
-    parse_supported_args(Rest, Opts#{
-        module => spectrometer_utils:atom_from_string(Mod)
-    });
+    Bin = spectrometer_utils:normalize_module_name(Mod),
+    parse_supported_args(Rest, Opts#{module => Bin});
 parse_supported_args(["--cache", Dir | Rest], Opts) ->
     parse_supported_args(Rest, Opts#{cache_dir => Dir});
 parse_supported_args(["-c", Dir | Rest], Opts) ->
     parse_supported_args(Rest, Opts#{cache_dir => Dir});
+parse_supported_args(["--erl" | Rest], Opts) ->
+    parse_supported_args(Rest, Opts#{filter => erlang_only});
+parse_supported_args(["--ex" | Rest], Opts) ->
+    parse_supported_args(Rest, Opts#{filter => elixir_only});
 parse_supported_args([Unknown | _], _) ->
     Reason = io_lib:format("unknown option ~s", [Unknown]),
     {error, Reason}.
@@ -410,7 +412,8 @@ parse_filter_args([MaybeFile | Rest], Opts) ->
 parse_query_args([], #{query := _Q} = Opts) ->
     Opts;
 parse_query_args([], _) ->
-    {error, "No function specified. Usage: query Module:Function[/Arity]"};
+    {error,
+        "No function specified. Usage: query Module:Function/Arity or Module.Function[/Arity]"};
 parse_query_args(["--cache", Dir | Rest], Opts) ->
     parse_query_args(Rest, Opts#{cache_dir => Dir});
 parse_query_args(["-c", Dir | Rest], Opts) ->
@@ -450,78 +453,3 @@ parse_update_args(["--force" | Rest], Opts) ->
     parse_update_args(Rest, Opts#{force => true});
 parse_update_args([Unknown | _], _Opts) ->
     {error, "Unknown option: " ++ Unknown}.
-
--doc false.
-run_audit(Opts) ->
-    spectrometer_analyzer:audit(Opts).
-
--doc false.
-run_analyzer_dispatch(Opts, Runner) ->
-    case spectrometer_utils:start_applications() of
-        ok ->
-            Runner(Opts);
-        {error, Reason} ->
-            io:format("Failed to start required applications... "),
-            {error, Reason}
-    end.
-
--doc false.
--spec run_ecosystem(opts_map()) -> ok | {error, term()}.
-run_ecosystem(Opts) ->
-    spectrometer_ecosystem:run(Opts).
-
--doc false.
-run_examine(Opts) ->
-    spectrometer_analyzer:examine(Opts).
-
--doc false.
--spec run_supported(opts_map()) -> ok | {error, unsupported}.
-run_supported(Opts) ->
-    spectrometer_atomvm:report_supported(Opts).
-
--doc false.
--spec run_filter(opts_map()) -> ok | {error, term()}.
-run_filter(Opts) ->
-    spectrometer_analyzer:filter(Opts).
-
--doc false.
--spec run_query(opts_map()) -> ok | {error, term()}.
-run_query(Opts) ->
-    spectrometer_atomvm:query(Opts).
-
--doc false.
--spec run_update(opts_map()) -> ok | {error, term()}.
-run_update(Opts) ->
-    case Opts of
-        #{cache_dir := CacheDir} ->
-            application:set_env(spectrometer, cache_dir, CacheDir);
-        #{} ->
-            ok
-    end,
-    OutputFile =
-        case Opts of
-            #{output := File} ->
-                File;
-            #{} ->
-                spectrometer_utils:user_db_file()
-        end,
-    Force = maps:get(force, Opts, false),
-
-    case filelib:is_file(OutputFile) andalso not Force of
-        true ->
-            io:format("Output file already exists: ~s\n", [OutputFile]),
-            io:format("Use --force to overwrite.\n"),
-            {error, {file_exists, OutputFile}};
-        _ ->
-            case spectrometer_updater:update_datafile(Opts, OutputFile) of
-                ok ->
-                    ok;
-                {error, Reason} ->
-                    io:format(
-                        standard_error, "Error: unable to update data, ~p\n", [
-                            Reason
-                        ]
-                    ),
-                    {error, Reason}
-            end
-    end.

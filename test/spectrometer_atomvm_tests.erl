@@ -16,19 +16,18 @@
 
 supported_modules_test_() ->
     [
-        {"returns list of atoms",
+        {"returns list of binaries",
             ?_assert(begin
                 Mods = spectrometer_atomvm:supported_modules(),
-                is_list(Mods) andalso lists:all(fun is_atom/1, Mods)
+                is_list(Mods) andalso lists:all(fun is_binary/1, Mods)
             end)},
 
-        {"contains expected OTP modules",
+        {"contains expected Elixir modules",
             ?_assert(begin
                 Mods = spectrometer_atomvm:supported_modules(),
-                lists:member(lists, Mods) andalso
-                    lists:member(maps, Mods) andalso
-                    lists:member(erlang, Mods) andalso
-                    lists:member(io, Mods)
+                lists:member(<<"Elixir.Access">>, Mods) andalso
+                    lists:member(<<"Elixir.Keyword">>, Mods) andalso
+                    lists:member(<<"Elixir.AVMPort">>, Mods)
             end)},
 
         {"returns non-empty list",
@@ -50,7 +49,8 @@ supported_functions_test_() ->
                 is_list(Funs) andalso
                     lists:all(
                         fun({M, F, A, _P, _S}) ->
-                            is_atom(M) andalso is_atom(F) andalso is_integer(A)
+                            is_binary(M) andalso is_binary(F) andalso
+                                is_integer(A)
                         end,
                         Funs
                     )
@@ -61,14 +61,14 @@ supported_functions_test_() ->
                 Funs = spectrometer_atomvm:get_supported_functions(),
                 lists:any(
                     fun
-                        ({lists, map, 2, _, _}) -> true;
+                        ({<<"Elixir.AVMPort">>, <<"call">>, 2, _, _}) -> true;
                         (_) -> false
                     end,
                     Funs
                 ) andalso
                     lists:any(
                         fun
-                            ({maps, get, 2, _, _}) -> true;
+                            ({<<"Elixir.Enum">>, <<"map">>, 2, _, _}) -> true;
                             (_) -> false
                         end,
                         Funs
@@ -80,7 +80,7 @@ supported_functions_test_() ->
                 Funs = spectrometer_atomvm:get_supported_functions(),
                 lists:all(
                     fun({M, F, A, _P, _S}) ->
-                        is_atom(M) andalso is_atom(F) andalso is_integer(A) andalso
+                        is_binary(M) andalso is_binary(F) andalso is_integer(A) andalso
                             A >= 0
                     end,
                     Funs
@@ -95,21 +95,31 @@ supported_functions_test_() ->
 is_supported_test_() ->
     [
         {"returns true for supported function",
-            ?_assert(spectrometer_atomvm:is_supported({lists, map, 2}))},
+            ?_assert(
+                spectrometer_atomvm:is_supported(
+                    {<<"Elixir.AVMPort">>, <<"call">>, 2}
+                )
+            )},
 
         {"returns false for unsupported function",
             ?_assertNot(
                 spectrometer_atomvm:is_supported(
-                    {nonexistent_module, foo, 0}
+                    {<<"nonexistent_module">>, <<"foo">>, 0}
                 )
             )},
 
         {"handles specific arity match",
-            ?_assert(spectrometer_atomvm:is_supported({io, format, 2}))},
+            ?_assert(
+                spectrometer_atomvm:is_supported(
+                    {<<"Elixir.Enum">>, <<"map">>, 2}
+                )
+            )},
 
         {"handles unknown module",
             ?_assertNot(
-                spectrometer_atomvm:is_supported({unknown_module, test, 1})
+                spectrometer_atomvm:is_supported(
+                    {<<"unknown_module">>, <<"test">>, 1}
+                )
             )},
 
         {"handles unknown function",
@@ -118,20 +128,26 @@ is_supported_test_() ->
                 case Mods of
                     [Mod | _] ->
                         not spectrometer_atomvm:is_supported(
-                            {Mod, nonexistent_function_12345, 0}
+                            {Mod, <<"nonexistent_function_12345">>, 0}
                         );
                     [] ->
                         true
                 end
             end)},
 
-        {"handles erlang BIFs",
+        {"handles Elixir BIFs",
             ?_assert(
-                spectrometer_atomvm:is_supported({erlang, atom_to_list, 1})
+                spectrometer_atomvm:is_supported(
+                    {<<"Elixir.AVMPort">>, <<"call">>, 2}
+                )
             )},
 
-        {"handles erlang operators",
-            ?_assert(spectrometer_atomvm:is_supported({erlang, '+', 2}))}
+        {"handles Elixir functions",
+            ?_assert(
+                spectrometer_atomvm:is_supported(
+                    {<<"Elixir.Enum">>, <<"map">>, 2}
+                )
+            )}
     ].
 
 %% =============================================================================
@@ -143,13 +159,17 @@ is_supported_with_platforms_test_() ->
         {"returns {true, all, Since} for functions on all platforms",
             ?_assertEqual(
                 true,
-                spectrometer_atomvm:is_supported({lists, map, 2})
+                spectrometer_atomvm:is_supported(
+                    {<<"Elixir.AVMPort">>, <<"call">>, 2}
+                )
             )},
 
         {"returns false for unsupported functions",
             ?_assertEqual(
                 false,
-                spectrometer_atomvm:is_supported({nonexistent, foo, 0})
+                spectrometer_atomvm:is_supported(
+                    {<<"nonexistent">>, <<"foo">>, 0}
+                )
             )}
     ].
 
@@ -162,19 +182,25 @@ support_info_test_() ->
         {"returns {true, all, Since} for functions on all platforms",
             ?_assertMatch(
                 {true, all, _},
-                spectrometer_atomvm:support_info({lists, map, 2})
+                spectrometer_atomvm:support_info(
+                    {<<"Elixir.AVMPort">>, <<"call">>, 2}
+                )
             )},
 
         {"returns false for unsupported functions",
             ?_assertEqual(
                 false,
-                spectrometer_atomvm:support_info({nonexistent, foo, 0})
+                spectrometer_atomvm:support_info(
+                    {<<"nonexistent">>, <<"foo">>, 0}
+                )
             )},
 
         {"returns since info for known functions",
             ?_assert(begin
                 %% Current data file has version info
-                Result = spectrometer_atomvm:support_info({lists, map, 2}),
+                Result = spectrometer_atomvm:support_info(
+                    {<<"Elixir.Enum">>, <<"map">>, 2}
+                ),
                 match_all_platforms_since(Result)
             end)}
     ].
@@ -199,7 +225,7 @@ supported_functions_with_platforms_test_() ->
                 is_list(Funs) andalso
                     lists:all(
                         fun({M, F, A, P, S}) ->
-                            is_atom(M) andalso is_atom(F) andalso
+                            is_binary(M) andalso is_binary(F) andalso
                                 is_integer(A) andalso
                                 (P =:= all orelse is_list(P)) andalso
                                 (is_binary(S) orelse
@@ -213,16 +239,21 @@ supported_functions_with_platforms_test_() ->
         {"has valid since info for known functions",
             ?_assert(begin
                 Funs = spectrometer_atomvm:get_supported_functions(),
-                %% Find lists:map/2 and check it has valid since info
+                % Find Elixir.Access:fetch/1 and check it has valid since info
+                % Since can be binary (<<"v0.5.0">>) or {unreleased, Branch}
                 case
                     lists:keyfind(
-                        {lists, map, 2},
+                        {<<"Elixir.Access">>, <<"fetch">>, 1},
                         1,
                         [{{M, F, A}, {P, S}} || {M, F, A, P, S} <- Funs]
                     )
                 of
-                    {_, {all, Since}} when is_binary(Since) -> true;
-                    _ -> false
+                    {_, {all, Since}} when
+                        is_binary(Since) orelse is_tuple(Since)
+                    ->
+                        true;
+                    _ ->
+                        false
                 end
             end)}
     ].
@@ -236,20 +267,20 @@ get_unsupported_test_() ->
         {"filters out supported functions from stats",
             ?_assert(begin
                 Stats = #{
-                    {lists, map, 2} => 10,
-                    {nonexistent_module, foo, 0} => 5
+                    {<<"Elixir.AVMPort">>, <<"call">>, 2} => 10,
+                    {<<"nonexistent_module">>, <<"foo">>, 0} => 5
                 },
                 Unsupported = spectrometer_atomvm:get_unsupported(Stats),
                 Keys = [K || {K, _} <- Unsupported],
-                not lists:member({lists, map, 2}, Keys) andalso
-                    lists:member({nonexistent_module, foo, 0}, Keys)
+                not lists:member({<<"Elixir.AVMPort">>, <<"call">>, 2}, Keys) andalso
+                    lists:member({<<"nonexistent_module">>, <<"foo">>, 0}, Keys)
             end)},
 
         {"returns only unsupported functions",
             ?_assert(begin
                 Stats = #{
-                    {nonexistent1, foo, 0} => 5,
-                    {nonexistent2, bar, 1} => 3
+                    {<<"nonexistent1">>, <<"foo">>, 0} => 5,
+                    {<<"nonexistent2">>, <<"bar">>, 1} => 3
                 },
                 Unsupported = spectrometer_atomvm:get_unsupported(Stats),
                 length(Unsupported) =:= 2
@@ -258,12 +289,12 @@ get_unsupported_test_() ->
         {"sorts by call count descending",
             ?_assertEqual(
                 [
-                    {{nonexistent1, foo, 0}, 10},
-                    {{nonexistent2, bar, 1}, 5}
+                    {{<<"nonexistent1">>, <<"foo">>, 0}, 10},
+                    {{<<"nonexistent2">>, <<"bar">>, 1}, 5}
                 ],
                 spectrometer_atomvm:get_unsupported(#{
-                    {nonexistent2, bar, 1} => 5,
-                    {nonexistent1, foo, 0} => 10
+                    {<<"nonexistent2">>, <<"bar">>, 1} => 5,
+                    {<<"nonexistent1">>, <<"foo">>, 0} => 10
                 })
             )},
 
@@ -271,21 +302,21 @@ get_unsupported_test_() ->
             ?_assertEqual(
                 [],
                 spectrometer_atomvm:get_unsupported(#{
-                    {lists, map, 2} => 10
+                    {<<"Elixir.Enum">>, <<"map">>, 2} => 10
                 })
             )},
 
         {"returns all when none are supported",
             ?_assertEqual(
                 [
-                    {{nonexistent1, foo, 0}, 5},
-                    {{nonexistent2, bar, 1}, 3}
+                    {{<<"nonexistent1">>, <<"foo">>, 0}, 5},
+                    {{<<"nonexistent2">>, <<"bar">>, 1}, 3}
                 ],
                 lists:sort(
                     fun({_, C1}, {_, C2}) -> C1 > C2 end,
                     spectrometer_atomvm:get_unsupported(#{
-                        {nonexistent1, foo, 0} => 5,
-                        {nonexistent2, bar, 1} => 3
+                        {<<"nonexistent1">>, <<"foo">>, 0} => 5,
+                        {<<"nonexistent2">>, <<"bar">>, 1} => 3
                     })
                 )
             )}
@@ -309,9 +340,11 @@ db_loading_test_() ->
             AltDir = spectrometer_utils:make_temp_dir("alt_cache_"),
             ok = filelib:ensure_path(AltDir),
             AltDbFile = filename:join(AltDir, "supported_functions.data"),
-            %% Write a minimal DB with a known entry
+            %% Write a minimal DB with a known entry (using binaries)
             AltDB = [
-                {test_mod, [{test_fun, 0, all, {unreleased, <<"test">>}}]}
+                {<<"test_mod">>, [
+                    {<<"test_fun">>, 0, all, <<118, 48, 46, 53, 46, 48>>}
+                ]}
             ],
             ok = file:write_file(AltDbFile, io_lib:format("~p.\n", [AltDB])),
             try
@@ -378,11 +411,23 @@ consult_db_nonexistent_test_() ->
 is_supported_arity_mismatch_test_() ->
     {"correctly distinguishes supported and unsupported arities", fun() ->
         %% Tests that is_supported/1 returns correct boolean for known arities.
-        %% Note: The DB currently uses separate entries per arity (not list arities).
-        Result1 = spectrometer_atomvm:is_supported({erlang, send, 1}),
-        Result2 = spectrometer_atomvm:is_supported({erlang, send, 2}),
-        %% send/1 is NOT supported by AtomVM (only send/2)
-        ?assertEqual(false, Result1),
-        %% send/2 is supported
+        %% Both map/1 and map/2 are supported by AtomVM.
+        Result1 = spectrometer_atomvm:is_supported(
+            {<<"Elixir.Enum">>, <<"map">>, 1}
+        ),
+        Result2 = spectrometer_atomvm:is_supported(
+            {<<"Elixir.Enum">>, <<"map">>, 2}
+        ),
+        %% map/1 IS supported
+        ?assertEqual(true, Result1),
+        %% map/2 is also supported
         ?assertEqual(true, Result2)
+    end}.
+
+is_supported_unsupported_test_() ->
+    {"returns false for truly unsupported function", fun() ->
+        Result = spectrometer_atomvm:is_supported(
+            {<<"nonexistent_module">>, <<"nonexistent_func">>, 99}
+        ),
+        ?assertEqual(false, Result)
     end}.
