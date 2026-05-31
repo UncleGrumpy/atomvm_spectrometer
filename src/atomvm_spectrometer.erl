@@ -358,10 +358,10 @@ parse_ecosystem_args([Unknown | _], _Opts) ->
 parse_supported_args([], Opts) ->
     Opts;
 parse_supported_args(["--module", Mod | Rest], Opts) ->
-    Bin = spectrometer_utils:normalize_module_name(Mod),
+    Bin = spectrometer_utils:normalize_module_name(Mod, true),
     parse_supported_args(Rest, Opts#{module => Bin});
 parse_supported_args(["-m", Mod | Rest], Opts) ->
-    Bin = spectrometer_utils:normalize_module_name(Mod),
+    Bin = spectrometer_utils:normalize_module_name(Mod, true),
     parse_supported_args(Rest, Opts#{module => Bin});
 parse_supported_args(["--cache", Dir | Rest], Opts) ->
     parse_supported_args(Rest, Opts#{cache_dir => Dir});
