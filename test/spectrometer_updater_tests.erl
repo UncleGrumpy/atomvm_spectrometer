@@ -1500,13 +1500,9 @@ scan_exavmlib_dir_test_() ->
 
 
 
-        ),
-        ?assertEqual(Acc, Result)
-    end}.
-
 %% =============================================================================
 %% parse_release_branch_version/1 direct tests (renamed from parse_release_version in this PR)
-%% =============================================================================
+
 
 parse_release_branch_version_basic_test_() ->
     {"parses major.minor version string into tuple", fun() ->
