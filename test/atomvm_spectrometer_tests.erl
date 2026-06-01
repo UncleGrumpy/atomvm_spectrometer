@@ -813,17 +813,26 @@ cleanup_temp_dir(Dir) ->
     end.
 
 format_platforms_test_() ->
-    {"formats platform lists", fun() ->
+    {"formats platform version maps", fun() ->
         ?assertEqual(
-            "all", spectrometer_atomvm:format_platforms(all)
-        ),
-        ?assertEqual("esp32", spectrometer_atomvm:format_platforms([esp32])),
-        ?assertEqual(
-            "esp32, rp2", spectrometer_atomvm:format_platforms([esp32, rp2])
+            "all since: v0.5.0",
+            spectrometer_atomvm:format_platform_versions(#{all => {0, 5, 0}})
         ),
         ?assertEqual(
-            "esp32, stm32, rp2",
-            spectrometer_atomvm:format_platforms([esp32, stm32, rp2])
+            "esp32 since: v0.5.0",
+            spectrometer_atomvm:format_platform_versions(#{esp32 => {0, 5, 0}})
+        ),
+        ?assertEqual(
+            "esp32 since: v0.5.0, rp2 since: v0.6.0",
+            spectrometer_atomvm:format_platform_versions(
+                #{esp32 => {0, 5, 0}, rp2 => {0, 6, 0}}
+            )
+        ),
+        ?assertEqual(
+            "esp32 since: v0.5.0, rp2 since: v0.6.0, stm32 since: v0.5.0",
+            spectrometer_atomvm:format_platform_versions(
+                #{esp32 => {0, 5, 0}, stm32 => {0, 5, 0}, rp2 => {0, 6, 0}}
+            )
         )
     end}.
 
