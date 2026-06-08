@@ -395,7 +395,7 @@ filter(Opts) ->
     case Opts of
         #{cache_dir := CacheDir} ->
             application:set_env(spectrometer, cache_dir, CacheDir),
-            spectrometer_atomvm:reload_db();
+            spectrometer_atomvm:flush_db_cache();
         #{} ->
             ok
     end,
@@ -509,6 +509,7 @@ filter_by_avm_support(Rows) ->
 
 %% @private
 %% Check if a string looks like a valid URL or repo path.
+-spec is_valid_url(string()) -> boolean().
 is_valid_url(Url) ->
     case
         string:find(Url, "http://") =:= nomatch andalso

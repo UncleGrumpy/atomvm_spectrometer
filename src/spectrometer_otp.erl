@@ -87,6 +87,7 @@ modules_list() ->
     end.
 
 %% Helper to generate module list and write to cache file
+-spec regenerate_and_write(string()) -> [any()].
 regenerate_and_write(ModFile) ->
     Modules = [M || {M, _, _} <- code:all_available()],
     case filelib:ensure_dir(ModFile) of

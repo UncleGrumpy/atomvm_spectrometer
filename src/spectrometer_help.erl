@@ -217,6 +217,7 @@ usage_filter() ->
         "  --avm              Filter to show only AtomVM unsupported functions\n"
         "  -c <dir>           Use alternate cache directory for supported functions DB\n"
         "  --cache <dir>      Same as -c\n"
+        "  --csv <dir>        Load data from provided csv file rather than cache data\n"
         "\n"
         "Examples:\n"
         "  spectrometer filter\n"

@@ -51,7 +51,7 @@ override may also be updated using `spectrometer_updater:update/1` with no
     is_supported/1,
     load_db/0,
     query/1,
-    reload_db/0,
+    flush_db_cache/0,
     report_supported/1
 ]).
 
@@ -115,7 +115,8 @@ is_supported({Mod, Fun, Arity}) ->
 -doc false.
 %% Find matching arity in function entries and return platforms and since info.
 %% Find matching arity in function entries and return SinceMap and Removed info.
--spec find_arity([#function{}], non_neg_integer() | all) -> {map(), version_tuple() | undefined} | none.
+-spec find_arity([#function{}], non_neg_integer() | all) ->
+    {map(), version_tuple() | undefined} | none.
 find_arity(FunMatches, Arity) ->
     find_arity(FunMatches, Arity, none).
 
@@ -181,13 +182,13 @@ get_unsupported(Stats) ->
     ).
 
 -doc """
-Force reload of the database from disk.
+Clears the cached database stored in the process dictionary.
 
-Clears the cached database stored in the process dictionary. Subsequent
-calls to `load_db/0` or `is_supported/1` will re-read the database file.
+Subsequent calls to `load_db/0` or `is_supported/1` will re-read the database
+file.
 """.
--spec reload_db() -> ok.
-reload_db() ->
+-spec flush_db_cache() -> ok.
+flush_db_cache() ->
     erase(supported_db),
     ok.
 
@@ -383,7 +384,7 @@ query(Opts) ->
     case Opts of
         #{cache_dir := CacheDir} ->
             application:set_env(spectrometer, cache_dir, CacheDir),
-            reload_db();
+            flush_db_cache();
         #{} ->
             ok
     end,
@@ -434,7 +435,7 @@ parse_query_string(Query) ->
                                     StrippedModStr, false
                                 ),
                             FunBin =
-                                spectrometer_utils:string_to_binary(FunStr),
+                                spectrometer_utils:ensure_binary(FunStr),
                             {ok, ModBin, FunBin, Arity};
                         _ ->
                             {error, "Invalid arity: " ++ ArityStr}
@@ -444,7 +445,7 @@ parse_query_string(Query) ->
                         spectrometer_utils:normalize_module_name(
                             StrippedModStr, false
                         ),
-                    FunBin = spectrometer_utils:string_to_binary(FunStr),
+                    FunBin = spectrometer_utils:ensure_binary(FunStr),
                     {ok, ModBin, FunBin};
                 _ ->
                     {error, "Empty function or invalid format"}
@@ -465,7 +466,7 @@ parse_query_string(Query) ->
                                                     ModStr, true
                                                 ),
                                             FunBin =
-                                                spectrometer_utils:string_to_binary(
+                                                spectrometer_utils:ensure_binary(
                                                     FunStr
                                                 ),
                                             {ok, ModBin, FunBin, Arity};
@@ -479,7 +480,7 @@ parse_query_string(Query) ->
                                             ModStr, true
                                         ),
                                     FunBin =
-                                        spectrometer_utils:string_to_binary(
+                                        spectrometer_utils:ensure_binary(
                                             FunStr
                                         ),
                                     {ok, ModBin, FunBin};
@@ -561,7 +562,7 @@ report_supported(Opts) ->
     case Opts of
         #{cache_dir := CacheDir} ->
             application:set_env(spectrometer, cache_dir, CacheDir),
-            reload_db();
+            flush_db_cache();
         #{} ->
             ok
     end,
@@ -674,7 +675,9 @@ supported_db_lookup(Mod) ->
 
 %% Format a single function line for output, showing per-platform versions
 %% and optional removal annotation.
--spec format_function_line(binary(), non_neg_integer() | all, map(), version_tuple() | undefined) -> ok.
+-spec format_function_line(
+    binary(), non_neg_integer() | all, map(), version_tuple() | undefined
+) -> ok.
 format_function_line(Fun, Arity, SinceMap, Removed) ->
     FunStr = format_fun_name(Fun),
     ArityStr =

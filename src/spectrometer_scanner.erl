@@ -64,6 +64,7 @@ scan_directory(Dir) ->
 
 -doc false.
 %% Recursively find .erl files in a directory, skipping symlinks.
+-spec find_erl_files(string()) -> [string()].
 find_erl_files(Dir) ->
     find_erl_files(Dir, []).
 
@@ -104,6 +105,7 @@ find_erl_files(Dir, Acc) ->
 %% Parse a single .erl file using epp_dodger for robust parsing.
 %% Returns {ok, Calls} where Calls is a map of {ModBin,FunBin,Arity} => Count,
 %% or {error, Reason} on failure.
+-spec parse_file(string()) -> {ok, map()} | {error, term()}.
 parse_file(File) ->
     try
         case epp_dodger:parse_file(File) of
@@ -147,6 +149,7 @@ parse_calls(File) ->
 -doc false.
 %% Extract the module name from parsed forms.
 %% Returns binary module name for consistency with scanner output format.
+-spec extract_module_name([term()]) -> binary() | undefined.
 extract_module_name(Forms) ->
     extract_module_name(Forms, undefined).
 
@@ -162,7 +165,8 @@ extract_module_name([Form | Rest], _Acc) ->
                             case erl_syntax:type(ModArg) of
                                 atom ->
                                     atom_to_binary(
-                                        erl_syntax:atom_value(ModArg), utf8
+                                        erl_syntax:atom_value(ModArg),
+                                        utf8
                                     );
                                 _ ->
                                     extract_module_name(Rest, undefined)
@@ -179,6 +183,7 @@ extract_module_name([Form | Rest], _Acc) ->
 
 -doc false.
 %% Extract calls, filtering out calls to the same module.
+-spec extract_calls_filtered([term()], binary() | undefined) -> map().
 extract_calls_filtered(Forms, FilterMod) ->
     lists:foldl(
         fun(Form, Acc) ->
@@ -203,6 +208,8 @@ extract_calls_filtered(Forms, FilterMod) ->
 
 -doc false.
 %% Extract application call, filtering out calls to FilterMod.
+-spec extract_application_filtered(term(), map(), binary() | undefined) ->
+    map().
 extract_application_filtered(Node, Acc, FilterMod) ->
     Op = erl_syntax:application_operator(Node),
     Args = erl_syntax:application_arguments(Node),
@@ -242,6 +249,7 @@ extract_application_filtered(Node, Acc, FilterMod) ->
 
 -doc false.
 %% Extract function calls from a parsed form by walking the syntax tree.
+-spec extract_calls(term(), map()) -> map().
 extract_calls(Form, Acc) ->
     erl_syntax_lib:fold(
         fun(Node, A) ->
@@ -260,6 +268,7 @@ extract_calls(Form, Acc) ->
 
 -doc false.
 %% Extract Module:Function(...) application calls from a syntax node.
+-spec extract_application_call(term(), map()) -> map().
 extract_application_call(Node, Acc) ->
     Op = erl_syntax:application_operator(Node),
     Args = erl_syntax:application_arguments(Node),
@@ -296,6 +305,7 @@ extract_application_call(Node, Acc) ->
 
 -doc false.
 %% Extract fun Module:Function/Arity references from a syntax node.
+-spec extract_implicit_fun(term(), map()) -> map().
 extract_implicit_fun(Node, Acc) ->
     Name = erl_syntax:implicit_fun_name(Node),
     case erl_syntax:type(Name) of
@@ -382,6 +392,7 @@ extract_implicit_fun(Node, Acc, FilterMod) ->
 
 -doc false.
 %% Merge per-file call statistics into the repository accumulator.
+-spec merge_file_calls(map(), map()) -> map().
 merge_file_calls(FileCalls, RepoAcc) ->
     maps:fold(
         fun(Key, Count, Acc) ->

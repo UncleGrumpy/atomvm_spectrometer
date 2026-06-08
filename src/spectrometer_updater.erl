@@ -367,8 +367,8 @@ update_datafile(Opts, OutputFile) ->
                         write_db_file(OutputFile, DBWithConstrainedPlatforms)
                     of
                         ok ->
-                            spectrometer_atomvm:reload_db(),
-                            spectrometer_atomvm:load_db(),
+                            spectrometer_atomvm:flush_db_cache(),
+                            _ = spectrometer_atomvm:load_db(),
                             io:format("Done.\n"),
                             ok;
                         {error, Err4} ->
@@ -573,7 +573,8 @@ branch_sort_key(Branch) ->
         _ ->
             {1, Branch}
     end.
--spec parse_release_branch_version(binary()) -> {non_neg_integer(), non_neg_integer()}.
+-spec parse_release_branch_version(binary()) ->
+    {non_neg_integer(), non_neg_integer()}.
 
 %% Parse a release branch version string like "0.7" into {0, 7}.
 parse_release_branch_version(Version) ->
@@ -625,7 +626,8 @@ parse_semver(VersionStr) when is_list(VersionStr) ->
         [Base] ->
             parse_semver_base(Base)
     end.
--spec parse_semver_base(string()) -> {ok, {integer(), integer(), integer()}} | {error, term()}.
+-spec parse_semver_base(string()) ->
+    {ok, {integer(), integer(), integer()}} | {error, term()}.
 
 parse_semver_base(Base) ->
     case string:split(Base, ".", all) of
@@ -675,7 +677,9 @@ compare_semver(First, Second) ->
                 true -> same
             end
     end.
--spec compare_semver_versions({integer(), integer(), integer()}, {integer(), integer(), integer()}) -> older | newer | same.
+-spec compare_semver_versions({integer(), integer(), integer()}, {
+    integer(), integer(), integer()
+}) -> older | newer | same.
 
 compare_semver_versions({M1, Mi1, P1}, {M2, Mi2, P2}) ->
     if
@@ -924,8 +928,8 @@ parse_platform_nifs(File, Platform, Acc, Since) ->
     MergeFun = fun([ModStr, FunStr, ArityStr], A) ->
         Arity = list_to_integer(ArityStr),
         Key = {
-            spectrometer_utils:string_to_binary(ModStr),
-            spectrometer_utils:string_to_binary(FunStr),
+            spectrometer_utils:ensure_binary(ModStr),
+            spectrometer_utils:ensure_binary(FunStr),
             Arity
         },
         maps:update_with(
@@ -982,11 +986,14 @@ merge_platforms(Existing, NewPlatform) ->
 parse_bifs_gperf(File, Acc, Platforms, Since) ->
     KeyFun = fun([Fun, ArityStr]) ->
         Arity = list_to_integer(ArityStr),
-        {<<"erlang">>, spectrometer_utils:string_to_binary(Fun), Arity}
+        {<<"erlang">>, spectrometer_utils:ensure_binary(Fun), Arity}
     end,
     parse_file_entries(
         File,
-        "^\\s*erlang:([A-Za-z0-9_+'/-]+|[^/,\\s]+)/(\\d+)",
+        %% Match erlang:Function/Arity where Function may contain operator
+        %% characters (+, -, *, /, =, <, >, !, etc.). Greedy match for
+        %% the function name, then backtrack to find the last "/" before digits.
+        "^\\s*erlang:([^,\\s]+)/(\\d+)",
         KeyFun,
         Platforms,
         Since,
@@ -998,14 +1005,18 @@ parse_nifs_gperf(File, Acc, Platforms, Since) ->
     KeyFun = fun([Mod, Fun, ArityStr]) ->
         Arity = list_to_integer(ArityStr),
         {
-            spectrometer_utils:string_to_binary(Mod),
-            spectrometer_utils:string_to_binary(Fun),
+            spectrometer_utils:ensure_binary(Mod),
+            spectrometer_utils:ensure_binary(Fun),
             Arity
         }
     end,
     parse_file_entries(
         File,
-        "\\s*?\"?([a-z_][a-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)/(\\d+)\"?",
+        %% Match Module:Function/Arity. Function may be a standard name
+        %% (letter/underscore start) or an operator (++ -- ! =/ =/= etc.).
+        %% The optional leading quote handles entries like "erlang:error/1".
+        %% Module must start with lowercase letter.
+        "\\s*?\"?([a-z_][a-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*|[+!@<>=./-]+)/(\\d+)\"?",
         KeyFun,
         Platforms,
         Since,
@@ -1247,7 +1258,7 @@ find_first_match(_Regex, [], Default) ->
     Default;
 find_first_match(Regex, [Line | Rest], Default) ->
     case re:run(Line, Regex, [{capture, all_but_first, list}]) of
-        {match, [Name]} -> spectrometer_utils:string_to_binary(Name);
+        {match, [Name]} -> spectrometer_utils:ensure_binary(Name);
         _ -> find_first_match(Regex, Rest, Default)
     end.
 -spec find_exports([string()]) -> [{binary(), non_neg_integer()}].
@@ -1297,7 +1308,7 @@ parse_export_list(Content) ->
             of
                 {match, [Fun, ArityStr]} ->
                     {true, {
-                        spectrometer_utils:string_to_binary(Fun),
+                        spectrometer_utils:ensure_binary(Fun),
                         list_to_integer(ArityStr)
                     }};
                 _ ->
@@ -1341,7 +1352,7 @@ scan_calls_dir(Dir, Label, Acc, Since) ->
 scan_calls(Files, Acc, Since) ->
     OTPMods = spectrometer_otp:modules_list(),
     OTPBins =
-        [spectrometer_utils:string_to_binary(Mod) || Mod <- OTPMods],
+        [spectrometer_utils:ensure_binary(Mod) || Mod <- OTPMods],
     OTPSet = sets:from_list(OTPBins),
     lists:foldl(
         fun(File, A) ->
@@ -1441,7 +1452,7 @@ scan_port_driver_file(File, Platform, Since, Acc) ->
     DriverNames2 = extract_driver_modules_from_files(File, DriverNames),
     lists:foldl(
         fun(DriverName, A) ->
-            ModBin = spectrometer_utils:string_to_binary(DriverName),
+            ModBin = spectrometer_utils:ensure_binary(DriverName),
             Key = {ModBin, <<"init">>, 1},
             SM = make_since_map([Platform], Since),
             maps:update_with(
@@ -1836,7 +1847,8 @@ get_indent([$\s | Rest], Count) ->
     get_indent(Rest, Count + 1);
 get_indent(_, Count) ->
     Count.
--spec find_elixir_exports([string()]) -> [{binary(), binary(), non_neg_integer()}].
+-spec find_elixir_exports([string()]) ->
+    [{binary(), binary(), non_neg_integer()}].
 
 %% Find all def exports with their module context.
 %% Scans for defmodule/defimpl to track the active module, then associates
@@ -1853,7 +1865,7 @@ find_elixir_exports(
     case find_elixir_module_def(Line) of
         {defmodule, ModName} ->
             % Entering a new defmodule block - track its indentation
-            ModBin = spectrometer_utils:string_to_binary(
+            ModBin = spectrometer_utils:ensure_binary(
                 "Elixir." ++ ModName
             ),
             Indent = get_indent(Line),
@@ -1863,7 +1875,7 @@ find_elixir_exports(
         {defimpl, ProtocolName} ->
             % Entering a defimpl block (also counts as a module context)
             % Without explicit for, just use the protocol name
-            ModBin = spectrometer_utils:string_to_binary(
+            ModBin = spectrometer_utils:ensure_binary(
                 "Elixir." ++ ProtocolName
             ),
             Indent = get_indent(Line),
@@ -1872,7 +1884,7 @@ find_elixir_exports(
             );
         {defimpl, ProtocolName, TargetName} ->
             % Entering a defimpl Protocol, for: Target block
-            ModBin = spectrometer_utils:string_to_binary(
+            ModBin = spectrometer_utils:ensure_binary(
                 "Elixir." ++ ProtocolName ++ "." ++ TargetName
             ),
             Indent = get_indent(Line),
@@ -1906,7 +1918,7 @@ find_elixir_exports(
             case find_elixir_def(Line) of
                 {ok, FunName, Args} ->
                     Arity = count_arity(Args),
-                    FunBin = spectrometer_utils:string_to_binary(
+                    FunBin = spectrometer_utils:ensure_binary(
                         FunName
                     ),
                     Export =
@@ -1926,7 +1938,12 @@ find_elixir_exports(
                     )
             end
     end.
--spec find_elixir_module_def(string()) -> {defmodule, string()} | {defimpl, string()} | {defimpl, string(), string()} | {end_block} | error.
+-spec find_elixir_module_def(string()) ->
+    {defmodule, string()}
+    | {defimpl, string()}
+    | {defimpl, string(), string()}
+    | {end_block}
+    | error.
 
 %% Detect module boundary lines: defmodule, defimpl, end
 find_elixir_module_def(Line) ->

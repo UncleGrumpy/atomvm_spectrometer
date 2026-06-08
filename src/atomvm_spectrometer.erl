@@ -220,6 +220,7 @@ parse_args(["query" | Rest]) ->
 parse_args([Unknown | _]) ->
     {error, "Unsupported command " ++ Unknown}.
 
+-spec parse_help_args([string()]) -> help | {help, atom()}.
 parse_help_args([Cmd | _]) ->
     case Cmd of
         "audit" -> {help, audit};

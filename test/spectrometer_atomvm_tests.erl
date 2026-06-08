@@ -236,9 +236,9 @@ db_loading_test_() ->
             ?assert(is_map(spectrometer_atomvm:load_db()))
         end},
 
-        {"reload_db clears cache", fun() ->
+        {"flush_db_cache clears cache", fun() ->
             DB1 = spectrometer_atomvm:load_db(),
-            ok = spectrometer_atomvm:reload_db(),
+            ok = spectrometer_atomvm:flush_db_cache(),
             CacheDir = spectrometer_utils:user_cache_path(),
             AltDir = spectrometer_utils:make_temp_dir("alt_cache_"),
             ok = filelib:ensure_path(AltDir),
@@ -251,12 +251,12 @@ db_loading_test_() ->
             ok = file:write_file(AltDbFile, io_lib:format("~p.\n", [AltDB])),
             try
                 application:set_env(spectrometer, cache_dir, AltDir),
-                ok = spectrometer_atomvm:reload_db(),
+                ok = spectrometer_atomvm:flush_db_cache(),
                 DB2 = spectrometer_atomvm:load_db(),
                 ?assert(DB1 =/= DB2)
             after
                 application:set_env(spectrometer, cache_dir, CacheDir),
-                spectrometer_atomvm:reload_db()
+                spectrometer_atomvm:flush_db_cache()
             end
         end}
     ].
@@ -351,7 +351,7 @@ function_record_test_() ->
     ].
 
 get_first_funs() ->
-    spectrometer_atomvm:reload_db(),
+    spectrometer_atomvm:flush_db_cache(),
     [{_, Funs} | _] = [
         {M, F}
      || {M, F} <- maps:to_list(spectrometer_atomvm:load_db()), F =/= []

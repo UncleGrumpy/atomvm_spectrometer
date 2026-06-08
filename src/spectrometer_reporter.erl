@@ -112,6 +112,7 @@ generate_report(Stats, MinCount) ->
 -doc false.
 %% Filter statistics to only OTP (non-local) functions.
 %% Uses a heuristic set of known OTP module names.
+-spec filter_otp_functions(map()) -> map().
 filter_otp_functions(Stats) ->
     OtpModules = get_otp_module_set(),
     maps:filter(
@@ -259,6 +260,7 @@ print_summary(Report, TopN, false) ->
     io:format("~s\n", [string:copies("=", 78)]),
     ok = io:format("Total unique MFAs: ~p\n", [length(Sorted)]).
 
+-spec sort_stats([term()]) -> [term()].
 sort_stats(Stats) ->
     lists:sort(fun({_, C1}, {_, C2}) -> C1 > C2 end, Stats).
 

@@ -52,6 +52,9 @@ fetch_github_repos({Limit, MinStars}) ->
 
 -doc false.
 %% Cursor-based GitHub repo fetching by star count range.
+-spec fetch_github_cursor(
+    integer() | infinity, integer() | undefined, [map()], integer()
+) -> [map()].
 fetch_github_cursor(_MinStars, _LastStars, Acc, Max) when length(Acc) >= Max ->
     lists:sublist(Acc, Max);
 fetch_github_cursor(MinStars, LastStars, Acc, Max) when LastStars < MinStars ->
@@ -82,6 +85,8 @@ fetch_github_cursor(MinStars, LastStars, Acc, Max) ->
             end
     end.
 
+-spec star_filter_range(integer() | infinity, integer() | undefined) ->
+    string().
 star_filter_range(infinity, _LastStars) ->
     ">=1";
 star_filter_range(MinStars, undefined) ->
@@ -89,6 +94,7 @@ star_filter_range(MinStars, undefined) ->
 star_filter_range(MinStars, LastStars) ->
     io_lib:format("~p..~p", [MinStars, LastStars]).
 
+-spec filter_repos([map()], [map()]) -> [map()].
 filter_repos([], Acc) ->
     lists:reverse(Acc);
 filter_repos([Repo | Rest], Acc) ->
@@ -106,6 +112,7 @@ filter_repos([Repo | Rest], Acc) ->
 
 -doc false.
 %% Fetch repos for a single star range query.
+-spec fetch_github_query(string(), integer()) -> {[map()], non_neg_integer()}.
 fetch_github_query(StarRange, Max) ->
     Query = lists:flatten("language:Erlang stars:" ++ StarRange),
     Limit = min(Max, ?GITHUB_MAX_PER_QUERY),
@@ -113,6 +120,9 @@ fetch_github_query(StarRange, Max) ->
 
 -doc false.
 %% Paginated GitHub API fetcher.
+-spec fetch_github_pages(
+    string(), pos_integer(), [map()], non_neg_integer(), non_neg_integer()
+) -> {[map()], non_neg_integer()}.
 fetch_github_pages(_Query, _Page, Acc, Max, TC) when length(Acc) >= Max ->
     {lists:sublist(lists:reverse(Acc), Max), TC};
 fetch_github_pages(_Query, Page, Acc, _Max, TC) when
@@ -179,6 +189,7 @@ Fetch Hex packages via the Hex API sorted by total downloads.
 Fetches Erlang packages up to `Limit`. Pass `infinity` to fetch all
 available packages (capped at API pagination limits).
 """.
+-spec fetch_hex_packages(integer() | infinity) -> [map()].
 fetch_hex_packages(Limit) ->
     Max =
         case Limit of
@@ -190,6 +201,7 @@ fetch_hex_packages(Limit) ->
 
 -doc false.
 %% Paginated Hex API fetcher.
+-spec fetch_hex_pages(pos_integer(), [map()], non_neg_integer()) -> [map()].
 fetch_hex_pages(Page, Acc, Max) when
     Page > ?HEX_MAX_PAGES; length(Acc) >= Max
 ->
@@ -250,6 +262,7 @@ fetch_hex_pages(Page, Acc, Max) ->
 
 -doc false.
 %% Extract GitHub URL from package links map.
+-spec find_github_link(map() | term()) -> string().
 find_github_link(Links) when is_map(Links) ->
     maps:fold(
         fun(_Key, Value, Acc) ->
@@ -286,7 +299,16 @@ Returns `ok` on success, `{error, {clone_failed, Status}}` on failure.
 -else.
 -define(GIT_OPTS, [{"GIT_TERMINAL_PROMPT", "0"}]).
 -endif.
+-spec download_github_repo(string(), string()) -> ok | {error, term()}.
 download_github_repo(CloneUrl, TmpDir) ->
+    case {filelib:is_dir(TmpDir), filelib:is_file(TmpDir)} of
+        {true, _} ->
+            file:del_dir_r(TmpDir);
+        {_, true} ->
+            file:delete(TmpDir);
+        {false, false} ->
+            ok
+    end,
     case os:find_executable("git") of
         false ->
             {error, git_not_found};
@@ -310,6 +332,7 @@ download_github_repo(CloneUrl, TmpDir) ->
 
 -doc false.
 %% Wait for git port to complete and return exit status.
+-spec await_git_port(port()) -> non_neg_integer() | {error, term()}.
 await_git_port(Port) ->
     receive
         {Port, {exit_status, Status}} -> Status
@@ -321,6 +344,7 @@ await_git_port(Port) ->
 
 -doc false.
 %% Drain any pending messages for a closed port to avoid mailbox pollution.
+-spec drain_port_messages(port()) -> ok.
 drain_port_messages(Port) ->
     receive
         {Port, {exit_status, _}} -> ok
@@ -335,6 +359,8 @@ Fetches the tarball from `repo.hex.pm`, extracts the nested `contents.tar.gz`,
 and checks for `.erl` files. Returns `{ok, TmpDir}` on success with the
 extracted contents in a temp directory, or `{error, Reason}` on failure.
 """.
+-spec download_hex_tarball(string(), string()) ->
+    {ok, string()} | {error, term()}.
 download_hex_tarball(Name, Version) ->
     Url = lists:flatten(
         io_lib:format(
@@ -367,6 +393,8 @@ download_hex_tarball(Name, Version) ->
 %% Extract and validate a Hex tarball in memory.
 %% Checks for contents.tar.gz and verifies .erl files exist.
 %% Validates archive entries to prevent path traversal attacks.
+-spec process_hex_tarball(binary(), string()) ->
+    {ok, string()} | {error, term()}.
 process_hex_tarball(TarBin, _Name) ->
     case erl_tar:extract({binary, TarBin}, [memory]) of
         {ok, OuterFiles} ->
@@ -426,6 +454,7 @@ process_hex_tarball(TarBin, _Name) ->
 -doc false.
 %% Validate tarball entry paths to prevent path traversal attacks.
 %% Rejects absolute paths, ".." segments, and ensures paths stay within TmpDir.
+-spec validate_tar_paths([string()]) -> ok | {error, term()}.
 validate_tar_paths(Paths) ->
     case lists:all(fun validate_tar_path/1, Paths) of
         true -> ok;
@@ -435,6 +464,7 @@ validate_tar_paths(Paths) ->
 -doc false.
 %% Validate a single tarball entry path.
 %% Returns true if the path is safe (relative, no ".." segments).
+-spec validate_tar_path(string()) -> boolean().
 validate_tar_path(Path) ->
     % Reject empty paths
     Path =/= [] andalso
@@ -447,6 +477,7 @@ validate_tar_path(Path) ->
 
 -doc false.
 %% Check if path looks like an absolute Windows path (C:\...).
+-spec is_windows_absolute_path(string()) -> boolean().
 is_windows_absolute_path([Drive, $:, Sep | _]) when
     Drive >= $A, Drive =< $Z, (Sep == $\\ orelse Sep == $/)
 ->
@@ -462,6 +493,7 @@ is_windows_absolute_path(_) ->
 %% Check if path contains ".." as a path segment.
 %% Normalizes separators before checking to prevent bypass with mixed separators
 %% like "a\\..//secret.erl" which could produce ".." segment.
+-spec has_dotdot_segment(string()) -> boolean().
 has_dotdot_segment(Path) ->
     % Normalize all backslashes to forward slashes first
     Normalized = re:replace(Path, "\\\\", "/", [{return, list}, global]),
@@ -470,12 +502,14 @@ has_dotdot_segment(Path) ->
 
 -doc false.
 %% Extract hostname from a URL for SNI.
+-spec hostname_from_url(string()) -> string().
 hostname_from_url(Url) ->
     #{host := Host} = uri_string:parse(Url),
     Host.
 
 -doc false.
 %% SSL options with peer verification.
+-spec ssl_options(string()) -> [tuple()].
 ssl_options(Hostname) ->
     Certs = public_key:cacerts_get(),
     [
@@ -490,6 +524,7 @@ ssl_options(Hostname) ->
 
 -doc false.
 %% Fetch a URL and return the body on success.
+-spec fetch(string()) -> {ok, binary()} | {error, term()}.
 fetch(Url) ->
     Hostname = hostname_from_url(Url),
     case

@@ -96,12 +96,14 @@ run(Opts) ->
         ),
 
         case run_coordinator(Work, Scanned, Stats, TotalProcessed, Opts) of
-            {ok, _FinalStats} -> ok;
-            {error, Err} -> {error, Err}
+            ok -> ok;
+            {error, Reason} -> error(Reason)
         end
     catch
-        Class:Reason:Stack ->
-            {error, {Class, Reason, Stack}}
+        error:R1:_ ->
+            {error, R1};
+        Class:R2:_ ->
+            {error, {Class, R2}}
     end.
 
 -doc """
@@ -151,10 +153,7 @@ work_key(hex, #{name := Name}) -> "hex:" ++ Name.
     non_neg_integer(),
     atomvm_spectrometer:opts_map()
 ) ->
-    {ok, #{
-        {binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}
-    }}
-    | {error, term()}.
+    ok | {error, term()}.
 run_coordinator(Work, Scanned, Stats, TotalProcessed, Opts) ->
     NumWorkers = maps:get(workers, Opts),
     case NumWorkers < 1 of
@@ -166,6 +165,9 @@ run_coordinator(Work, Scanned, Stats, TotalProcessed, Opts) ->
             )
     end.
 
+-spec do_run_coordinator(
+    list(), map(), map(), non_neg_integer(), map(), pos_integer()
+) -> ok | {error, term()}.
 do_run_coordinator(Work, Scanned, Stats, TotalProcessed, _Opts, NumWorkers) ->
     TotalWork = length(Work) + TotalProcessed,
     Self = self(),
@@ -183,7 +185,7 @@ do_run_coordinator(Work, Scanned, Stats, TotalProcessed, _Opts, NumWorkers) ->
         })
     end),
     receive
-        {coordinator_done, FinalStats} -> {ok, FinalStats};
+        {coordinator_done, _FinalStats} -> ok;
         {error, Reason} -> {error, Reason};
         {'DOWN', CoordRef, process, CoordPid, Reason} -> {error, Reason}
     end.
@@ -271,6 +273,8 @@ coordinator_loop(State) ->
             end
     end.
 
+-spec handle_worker_exit(map(), 'undefined' | {reference(), pid(), term()}) ->
+    {'coordinator_done', term()} | {'error', term()}.
 handle_worker_exit(State, ExitInfo) ->
     #{
         active_workers := AW,
@@ -343,15 +347,8 @@ process_github_repo(Repo) ->
     CloneUrl = maps:get(clone_url, Repo),
     TmpDir = spectrometer_utils:make_temp_dir("gh_"),
     try
-        case
-            spectrometer_utils:run_git_command(
-                [
-                    "clone", "--depth", "1", "--quiet", CloneUrl, TmpDir
-                ],
-                [{"GIT_TERMINAL_PROMPT", "0"}]
-            )
-        of
-            {ok, _} ->
+        case spectrometer_http:download_github_repo(CloneUrl, TmpDir) of
+            ok ->
                 case filelib:is_dir(TmpDir) of
                     true -> spectrometer_scanner:scan_directory(TmpDir);
                     false -> #{}

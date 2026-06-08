@@ -19,7 +19,7 @@ directory removal, and GitHub URL normalization for deduplication.
 """.
 
 -export([
-    string_to_binary/1,
+    ensure_binary/1,
     clone_temp_repo/2,
     bundled_data_path/0,
     is_elixir_module_name/1,
@@ -37,12 +37,18 @@ directory removal, and GitHub URL normalization for deduplication.
 
 -type platform() :: emscripten | esp32 | generic_unix | rp2 | stm32.
 
--doc "If the given string is not already a binary string, convert it to binary".
--spec string_to_binary(string() | binary()) -> binary().
-string_to_binary(Str) when is_list(Str) ->
-    list_to_binary(Str);
-string_to_binary(Bin) when is_binary(Bin) ->
-    Bin.
+-doc "Convert atoms or strings to binary".
+-spec ensure_binary(term()) -> binary().
+ensure_binary(B) when is_binary(B) -> B;
+ensure_binary(A) when is_atom(A) -> atom_to_binary(A, utf8);
+ensure_binary(S) when is_list(S) -> list_to_binary(S);
+ensure_binary(T) ->
+    ?LOG_WARNING(
+        "ensure_binary/1 received unexpected type ~p, returning empty binary.",
+        [T]
+    ),
+    <<>>.
+
 
 -doc """
 Return the path to the bundled human-readable data file.
@@ -95,6 +101,7 @@ user_db_file() ->
 -doc false.
 %% Find the bundled human-readable data file.
 %% Tries code:priv_dir first, then falls back to paths relative to the escript.
+-spec bundled_db_file() -> string().
 bundled_db_file() ->
     case code:priv_dir(spectrometer) of
         Priv when is_list(Priv) ->
@@ -110,6 +117,7 @@ bundled_db_file() ->
 -doc false.
 %% For escript builds: resolve path relative to the escript binary location.
 %% Tries multiple candidate paths (rebar3 build, installed, source tree).
+-spec try_script_relative() -> string() | false.
 try_script_relative() ->
     ScriptDir =
         case filename:dirname(escript:script_name()) of
@@ -150,6 +158,7 @@ try_script_relative() ->
 
 -doc false.
 %% Find the first existing file from a list of candidate paths.
+-spec find_first_file([string()]) -> string() | false.
 find_first_file([Path | Rest]) ->
     case filelib:is_regular(Path) of
         true -> Path;
@@ -167,6 +176,7 @@ integer suffix. The directory will be created in a sub-directory of
 "test_cache_" the result would be similar to:
 >`/tmp/spectrometer/test_cache_454279`
 """.
+-spec make_temp_dir(string()) -> string().
 make_temp_dir(Prefix) ->
     Rand = integer_to_list(erlang:unique_integer([positive])),
     Dir = filename:join([system_temp_dir(), "spectrometer", Prefix ++ Rand]),
@@ -236,6 +246,7 @@ gather_git_output(Port, Acc) ->
         {error, timeout}
     end.
 %% Drain any pending messages for a closed port to avoid mailbox pollution.
+-spec drain_port_messages(port()) -> ok.
 drain_port_messages(Port) ->
     receive
         {Port, _} -> drain_port_messages(Port)
@@ -262,6 +273,7 @@ of GitHub repository URLs across different formats.
 "https://github.com/atomvm/atomvm.git"
 ```
 """.
+-spec normalize_github_url(string()) -> string().
 normalize_github_url(Url) ->
     Url1 = string:lowercase(Url),
     Url2 = string:trim(Url1),
@@ -443,13 +455,13 @@ normalize_module_name(Atom, ElixirFlag) when is_atom(Atom) ->
 normalize_module_name(Str, true) when is_list(Str) ->
     case Str of
         "Elixir." ++ _ ->
-            string_to_binary(Str);
+            list_to_binary(Str);
         [C | _] when C >= $A, C =< $Z ->
             % Capitalized module name - treat as Elixir module
-            string_to_binary("Elixir." ++ Str);
+            list_to_binary("Elixir." ++ Str);
         _ ->
             % Lowercase (Erlang module) or other - keep as-is
-            string_to_binary(Str)
+            list_to_binary(Str)
     end;
 normalize_module_name(Bin, true) when is_binary(Bin) ->
     case Bin of
@@ -457,7 +469,5 @@ normalize_module_name(Bin, true) when is_binary(Bin) ->
         <<C, _/binary>> when C >= $A, C =< $Z -> <<"Elixir.", Bin/binary>>;
         _ -> Bin
     end;
-normalize_module_name(Str, false) when is_list(Str) ->
-    string_to_binary(Str);
-normalize_module_name(Str, false) when is_binary(Str) ->
-    Str.
+normalize_module_name(Str, false) ->
+    ensure_binary(Str).

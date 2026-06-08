@@ -411,7 +411,7 @@ main_filter_no_user_state_test_() ->
                         {ok, Val} ->
                             application:set_env(spectrometer, cache_dir, Val)
                     end,
-                    spectrometer_atomvm:reload_db()
+                    spectrometer_atomvm:flush_db_cache()
                 end)
             end
         ]}
@@ -477,7 +477,7 @@ main_query_mock_function_test_() ->
                 undefined -> application:unset_env(spectrometer, cache_dir);
                 {ok, Val} -> application:set_env(spectrometer, cache_dir, Val)
             end,
-            spectrometer_atomvm:reload_db(),
+            spectrometer_atomvm:flush_db_cache(),
             spectrometer_utils:purge_dir(CacheDir)
         end,
         {with, [
@@ -519,7 +519,7 @@ main_supported_mock_module_test_() ->
                 undefined -> application:unset_env(spectrometer, cache_dir);
                 {ok, Val} -> application:set_env(spectrometer, cache_dir, Val)
             end,
-            spectrometer_atomvm:reload_db(),
+            spectrometer_atomvm:flush_db_cache(),
             spectrometer_utils:purge_dir(CacheDir)
         end,
         {with, [
@@ -606,7 +606,7 @@ main_update_with_local_repo_test_() ->
                     ),
                     Prev = application:get_env(spectrometer, cache_dir),
                     application:set_env(spectrometer, cache_dir, CacheDir),
-                    spectrometer_atomvm:reload_db(),
+                    spectrometer_atomvm:flush_db_cache(),
                     {{TempDir, AtomVMDir}, OutputFile, CacheDir, Prev}
                 end,
                 fun({{TempDir, _AtomVMDir}, _OutputFile, CacheDir, Prev}) ->
@@ -616,7 +616,7 @@ main_update_with_local_repo_test_() ->
                         {ok, Val} ->
                             application:set_env(spectrometer, cache_dir, Val)
                     end,
-                    spectrometer_atomvm:reload_db(),
+                    spectrometer_atomvm:flush_db_cache(),
                     spectrometer_utils:purge_dir(TempDir),
                     spectrometer_utils:purge_dir(CacheDir)
                 end,
@@ -669,7 +669,7 @@ main_update_no_force_overwrite_test_() ->
                         {ok, Val} ->
                             application:set_env(spectrometer, cache_dir, Val)
                     end,
-                    spectrometer_atomvm:reload_db(),
+                    spectrometer_atomvm:flush_db_cache(),
                     spectrometer_utils:purge_dir(CacheDir),
                     spectrometer_utils:purge_dir(TempDir)
                 end,
@@ -835,7 +835,7 @@ update_force_existing_db_test_() ->
                 undefined -> ok;
                 {ok, _} -> application:unset_env(spectrometer, cache_dir)
             end,
-            spectrometer_atomvm:reload_db(),
+            spectrometer_atomvm:flush_db_cache(),
             spectrometer_utils:purge_dir(Dir)
         end,
         {with, [
