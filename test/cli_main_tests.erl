@@ -575,8 +575,11 @@ main_audit_hex_package_test_() ->
         false ->
             {"main(['audit', '--hex', 'cowboy']) audits package with unsupported functions",
                 fun() ->
-                    ?assertEqual(
-                        ok,
+                    ?assertMatch(
+                        %% We use greater than 1 here, to make sure this isn't an error,
+                        %% but stay well under the number of unsupported functions to
+                        %% allow for AtomVM adding support for many of them in the future.
+                        {error, {halt, Unsupported}} when Unsupported > 1,
                         atomvm_spectrometer:main(["audit", "--hex", "cowboy"])
                     )
                 end};

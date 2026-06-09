@@ -10,6 +10,8 @@
 
 -module(spectrometer_utils).
 
+-include_lib("kernel/include/logger.hrl").
+
 -moduledoc """
 Utility functions shared across the application.
 
@@ -313,8 +315,8 @@ with an error code if cloning fails.
     string() | {error, Reason :: term()}.
 clone_temp_repo(Branch, Tag) ->
     TmpDir = spectrometer_utils:make_temp_dir("avm_update_"),
-    Url = "https://github.com/atomvm/AtomVM",
-    io:format("Cloning ~s (branch ~s) to ~s...\n", [Url, Branch, TmpDir]),
+    Url = "https://github.com/atomvm/AtomVM.git",
+    ?LOG_DEBUG("Cloning ~s (branch ~s) to ~s", [Url, Branch, TmpDir]),
     CloneResult = run_git_command(
         [
             "clone", "--quiet", "--depth", "1", "-b", Branch, Url, TmpDir
@@ -327,7 +329,7 @@ clone_temp_repo(Branch, Tag) ->
                 undefined ->
                     TmpDir;
                 TagStr when is_list(TagStr) ->
-                    io:format("Checking out tag ~s...\n", [TagStr]),
+                    ?LOG_DEBUG("Checking out tag ~s", [TagStr]),
                     _ = run_git_command(
                         ["-C", TmpDir, "fetch", "--tags", "--quiet"],
                         [{"GIT_TERMINAL_PROMPT", "0"}]
@@ -350,11 +352,11 @@ clone_temp_repo(Branch, Tag) ->
                     end
             end;
         {error, Reason} when is_tuple(Reason); is_atom(Reason) ->
-            io:format("Error: Could not clone ~s: ~p\n", [Url, Reason]),
+            ?LOG_ERROR("Could not clone ~s: ~p", [Url, Reason]),
             _ = purge_dir(TmpDir),
             {error, Reason};
         Error ->
-            io:format("Error: Could not clone ~s: ~p\n", [Url, Error]),
+            ?LOG_ERROR("Could not clone ~s: ~p", [Url, Error]),
             _ = purge_dir(TmpDir),
             Error
     end.

@@ -14,6 +14,7 @@
 
 -module(spectrometer_analyzer).
 
+-include_lib("kernel/include/logger.hrl").
 -include("ecosystem.hrl").
 
 -moduledoc """
@@ -114,22 +115,17 @@ after scanning.
 examine(Opts) ->
     analyze(Opts, false).
 
+-doc """
+Analyze a target or multi-target file for AtomVM compatibility and generate a report.
+
+When called from `examine/1` the function returns `ok` or `{error, term()}` When called from
+`audit/1` returns the total number of unsupported functions, or an error tuple if the analysis
+fails.
+""".
 -spec analyze(Opts :: map(), AvmAudit :: boolean()) ->
     ok | {error, Reason :: term()}.
 analyze(Opts, AvmAudit) ->
     try
-        case spectrometer_utils:start_applications() of
-            {error, {already_started, _}} ->
-                ok;
-            {error, Reason0} ->
-                io:format(
-                    "Failed to start required applications: ~p\n",
-                    [Reason0]
-                ),
-                error(Reason0);
-            ok ->
-                ok
-        end,
         case Opts of
             #{cache_dir := CacheDir} ->
                 application:set_env(spectrometer, cache_dir, CacheDir);
@@ -146,7 +142,7 @@ analyze(Opts, AvmAudit) ->
                     scan_target(Target)
             end,
 
-        io:format("\nAnalyzing ~p unique function calls...\n", [
+        ?LOG_INFO("Analyzing ~p unique function calls", [
             maps:size(Stats)
         ]),
 
@@ -161,14 +157,22 @@ analyze(Opts, AvmAudit) ->
             end,
         spectrometer_reporter:print_summary(Report, Top, AvmAudit),
 
+        Unsupported =
+            case maps:size(Stats) > 0 of
+                true ->
+                    length(maps:get(unsupported, Report, []));
+                false ->
+                    ?LOG_ERROR("No function calls detected. No erlang sources were found in the target."),
+                    error(no_fun)
+            end,
         case Opts of
             #{output := OutputFile} when is_list(OutputFile) ->
                 case spectrometer_reporter:write_csv(OutputFile, Report) of
                     ok ->
                         ok;
                     {error, Reason1} ->
-                        io:format(
-                            "Failed to write CSV report to ~s: ~p\n",
+                        ?LOG_ERROR(
+                            "Failed to write CSV report to ~s: ~p",
                             [OutputFile, Reason1]
                         ),
                         error(Reason1)
@@ -182,19 +186,19 @@ analyze(Opts, AvmAudit) ->
 
 -spec scan_target(scan_target()) -> stats_map().
 scan_target({local_dir, Dir}) ->
-    io:format("  Scanning local directory: ~s\n", [Dir]),
+    ?LOG_DEBUG("Scanning local directory: ~s", [Dir]),
     spectrometer_scanner:scan_directory(Dir);
 scan_target({github_clone, CloneUrl}) ->
     TmpDir = spectrometer_utils:make_temp_dir("gh_"),
     try
-        io:format("  Cloning ~s...\n", [CloneUrl]),
+        ?LOG_DEBUG("Cloning ~s into ~s", [CloneUrl, TmpDir]),
         Url = spectrometer_utils:normalize_github_url(CloneUrl),
         case spectrometer_http:download_github_repo(Url, TmpDir) of
             ok ->
-                io:format("  Scanning...\n"),
+                ?LOG_DEBUG("Scanning ~s", [TmpDir]),
                 spectrometer_scanner:scan_directory(TmpDir);
             {error, Reason} ->
-                io:format("  Clone failed: ~p\n", [Reason]),
+                ?LOG_ERROR("Clone failed: ~p", [Reason]),
                 #{}
         end
     after
@@ -219,7 +223,7 @@ scan_target({hex, PackageName, "latest"}) ->
                     ->
                         scan_target({hex, PackageName, binary_to_list(V)});
                     _ ->
-                        io:format("  Failed to get version info for ~s\n", [
+                        ?LOG_ERROR("Failed to get version info for ~s", [
                             PackageName
                         ]),
                         #{}
@@ -229,23 +233,23 @@ scan_target({hex, PackageName, "latest"}) ->
                     #{}
             end;
         {error, Reason} ->
-            io:format("  Failed to fetch ~s from Hex: ~p\n", [
+            ?LOG_ERROR("Failed to fetch ~s from Hex: ~p", [
                 PackageName, Reason
             ]),
             #{}
     end;
 scan_target({hex, PackageName, Version}) ->
-    io:format("  Downloading ~s-~s from Hex...\n", [PackageName, Version]),
+    ?LOG_DEBUG("Downloading ~s-~s from Hex...", [PackageName, Version]),
     case spectrometer_http:download_hex_tarball(PackageName, Version) of
         {ok, TmpDir} ->
             try
-                io:format("  Scanning...\n"),
+                ?LOG_DEBUG("Scanning ~s", [PackageName ++ "-" ++ Version]),
                 spectrometer_scanner:scan_directory(TmpDir)
             after
                 spectrometer_utils:purge_dir(TmpDir)
             end;
         {error, Reason} ->
-            io:format("  Failed to download ~s-~s: ~p\n", [
+            ?LOG_ERROR("Failed to download ~s-~s: ~p", [
                 PackageName, Version, Reason
             ]),
             #{}
@@ -258,13 +262,13 @@ scan_multi(File) ->
         {ok, Bin} ->
             Lines = string:split(binary_to_list(Bin), "\n", all),
             Targets = parse_target_lines(Lines),
-            io:format("Scanning ~p targets from ~s...\n\n", [
+            ?LOG_DEBUG("Scanning ~p targets from ~s...", [
                 length(Targets), File
             ]),
             {_, FinalAcc} = lists:foldl(
                 fun(Target, {Count, Acc}) ->
                     NewCount = Count + 1,
-                    io:format("[~p/~p]\n", [NewCount, length(Targets)]),
+                    ?LOG_DEBUG("[~p/~p]", [NewCount, length(Targets)]),
                     Stats0 = scan_target(Target),
                     NewAcc = merge_stats(Stats0, Acc),
                     {NewCount, NewAcc}
@@ -348,26 +352,25 @@ load_ecosystem_state() ->
         {ok, Bin} ->
             try
                 case binary_to_term(Bin) of
-                    {spectrometer_v1, _, Stats, _} when is_map(Stats) ->
-                        io:format("Loaded ecosystem state from ~s\n", [
+                    {spectrometer_v1, _Scanned, Stats, _PackageMap,
+                        _TotalProcessed} when
+                        is_map(Stats)
+                    ->
+                        ?LOG_DEBUG("Loaded ecosystem state from ~s", [
                             StateFile
                         ]),
                         Stats;
                     _ ->
-                        io:format(
-                            standard_error,
-                            "Warning: Invalid ecosystem state file: ~s, starting with empty data set.\n",
-                            [
-                                StateFile
-                            ]
+                        ?LOG_WARNING(
+                            "Warning: Invalid ecosystem state file: ~s, starting with empty data set.",
+                            [StateFile]
                         ),
                         #{}
                 end
             catch
                 _:_:_ ->
-                    io:format(
-                        standard_error,
-                        "Warning: Unable to load data from ~s, starting with empty data set.\n",
+                    ?LOG_WARNING(
+                        "Warning: Unable to load data from ~s, starting with empty data set.",
                         [StateFile]
                     ),
                     #{}
@@ -375,9 +378,7 @@ load_ecosystem_state() ->
         {error, enoent} ->
             #{};
         {error, Reason} ->
-            io:format(standard_error, "Error: Could not read ~s: ~p\n", [
-                StateFile, Reason
-            ]),
+            ?LOG_ERROR("Error: Could not read ~s: ~p~n", [StateFile, Reason]),
             #{}
     end.
 
@@ -407,8 +408,7 @@ filter(Opts) ->
             case filter_by_repositories(Rows, MinRepos) of
                 [] ->
                     io:format(
-                        standard_error,
-                        "Error: No OTP functions found with >= ~p repos. Try lowering --min-repos?\n",
+                        "No OTP functions found with >= ~p repos. Try lowering --min-repos?\n",
                         [MinRepos]
                     ),
                     ok;
@@ -419,11 +419,10 @@ filter(Opts) ->
                             false -> FilteredByRepos
                         end,
 
-                    case Filtered of
-                        [] ->
+                    case {Filtered, AvmFilter} of
+                        {[], true} ->
                             io:format(
-                                standard_error,
-                                "No functions match the specified criteria.\n",
+                                "All functions are supported by AtomVM! :-)\n",
                                 []
                             ),
                             ok;

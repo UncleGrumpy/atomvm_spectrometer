@@ -9,6 +9,8 @@
 
 -module(spectrometer_otp).
 
+-include_lib("kernel/include/logger.hrl").
+
 -moduledoc """
 This module contains functions for identifying OTP modules.
 """.
@@ -53,33 +55,33 @@ modules_list() ->
                                 true ->
                                     Modules;
                                 false ->
-                                    io:format(
-                                        "Warning: invalid module identifiers in OTP module cache ~s, regenerating...\n",
+                                    ?LOG_WARNING(
+                                        "Invalid module identifiers in OTP module cache ~s, regenerating.",
                                         [ModFile]
                                     ),
                                     regenerate_and_write(ModFile)
                             end;
                         _ ->
-                            io:format(
-                                "Warning: unexpected data in OTP module cache ~s, regenerating...\n",
+                            ?LOG_WARNING(
+                                "Unexpected data in OTP module cache ~s, regenerating.",
                                 [ModFile]
                             ),
                             regenerate_and_write(ModFile)
                     catch
                         _:_ ->
-                            io:format(
-                                "Warning: error decoding OTP module cache file ~s\n",
+                            ?LOG_WARNING(
+                                "Error decoding OTP module cache file ~s",
                                 [ModFile]
                             ),
-                            io:format("Regenerating OTP module cache...\n"),
+                            ?LOG_WARNING("Regenerating OTP module cache."),
                             regenerate_and_write(ModFile)
                     end;
                 {error, Reason} ->
-                    io:format(
-                        "Error reading OTP module cache file ~s: ~p\n",
+                    ?LOG_WARNING(
+                        "Error reading OTP module cache file ~s: ~p",
                         [ModFile, Reason]
                     ),
-                    io:format("Regenerating OTP module cache...\n"),
+                    ?LOG_WARNING("Regenerating OTP module cache."),
                     regenerate_and_write(ModFile)
             end;
         false ->
@@ -87,7 +89,7 @@ modules_list() ->
     end.
 
 %% Helper to generate module list and write to cache file
--spec regenerate_and_write(string()) -> [any()].
+-spec regenerate_and_write(file:filename_all()) -> [any()].
 regenerate_and_write(ModFile) ->
     Modules = [M || {M, _, _} <- code:all_available()],
     case filelib:ensure_dir(ModFile) of
@@ -96,15 +98,15 @@ regenerate_and_write(ModFile) ->
                 ok ->
                     ok;
                 {error, Reason} ->
-                    io:format(
-                        "Warning: Unable to write to otp module data file ~s, reason: ~p\n",
+                    ?LOG_WARNING(
+                        "Unable to write to otp module data file ~s, reason: ~p\n",
                         [ModFile, Reason]
                     ),
                     ok
             end;
         {error, Reason} ->
-            io:format(
-                "Warning: Unable to create cache dir for OTP module data ~s, reason: ~p\n",
+            ?LOG_WARNING(
+                "Unable to create cache dir for OTP module data ~s, reason: ~p\n",
                 [ModFile, Reason]
             ),
             ok

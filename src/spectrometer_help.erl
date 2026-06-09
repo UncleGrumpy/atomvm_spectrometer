@@ -24,9 +24,12 @@ usage() ->
         "\nspectrometer ~s\n"
         "Usage: spectrometer [OPTIONS] COMMAND [COMMAND_OPTIONS]\n"
         "\n"
-        "Options:\n"
-        "  -h, --help     Display this help message\n"
-        "  --version      Display version number\n"
+        "Options: (Global options may also be passed as COMMAND_OPTIONS)\n"
+        "  -h, --help               Display this help message and exit (no command will be executed)\n"
+        "  --version                Display version number and exit (no command will be executed)\n"
+        "  --log <level>            Set log level (debug|info|notice|warning|error|critical|alert|emergency)\n"
+        "                           Default: notice\n"
+        "  --logfile <file path>    Log to specified file rather than stdio\n"
         "\n"
         "Commands:\n"
         "  help         Show this help message\n"
@@ -40,13 +43,7 @@ usage() ->
         "  version      Display version number and exit\n"
         "\n"
         "Get detailed help on a command:\n"
-        "  spectrometer help audit\n"
-        "  spectrometer help ecosystem\n"
-        "  spectrometer help examine\n"
-        "  spectrometer help supported\n"
-        "  spectrometer help filter\n"
-        "  spectrometer help update\n"
-        "  spectrometer help query\n",
+        "  spectrometer help COMMAND\n",
         [spectrometer_utils:version()]
     ).
 

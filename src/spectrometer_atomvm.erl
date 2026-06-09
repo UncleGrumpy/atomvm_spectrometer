@@ -8,7 +8,7 @@
 %% SPDX-License-Identifier: Apache-2.0
 -module(spectrometer_atomvm).
 
--include_lib("kernel/include/file.hrl").
+-include_lib("kernel/include/logger.hrl").
 -include("function.hrl").
 
 -moduledoc """
@@ -141,10 +141,11 @@ find_arity([_ | Rest], Arity, Acc) ->
     %% Skip entries with unexpected format
     find_arity(Rest, Arity, Acc).
 
--doc "\n"
-"Return all supported functions with platform version and removal information.\n"
-"\n"
-"Returns a list of `{Module, #function{}}` pairs for every function in the database.\n".
+-doc """
+Return all supported functions with platform version and removal information.
+
+Returns a list of `{Module, #function{}}` pairs for every function in the database.
+""".
 -spec get_supported_functions() -> [{binary(), #function{}}].
 get_supported_functions() ->
     DB = load_db(),
@@ -313,17 +314,15 @@ consult_db(Path) ->
                 )
             catch
                 _:Reason ->
-                    io:format(
-                        standard_error,
-                        "Warning: Could not read data: ~p, using empty database~n",
+                    ?LOG_WARNING(
+                        "Could not read data: ~p, using empty database",
                         [Reason]
                     ),
                     #{}
             end;
         {error, Reason} ->
-            io:format(
-                standard_error,
-                "Warning: Could not read ~s: ~p, using empty database~n",
+            ?LOG_WARNING(
+                "Could not read ~s: ~p, using empty database",
                 [Path, Reason]
             ),
             #{}
@@ -390,6 +389,8 @@ query(Opts) ->
     end,
     Query = maps:get(query, Opts),
     case parse_query_string(Query) of
+        {ok, Mod} ->
+            print_supported(Mod, undefined);
         {ok, Mod, Fun} ->
             show_query({Mod, Fun}),
             ok;
@@ -397,10 +398,10 @@ query(Opts) ->
             show_query({Mod, Fun, Arity}),
             ok;
         {error, Reason} ->
-            io:format(standard_error, "Error: ~s\n", [Reason]),
+            ?LOG_ERROR("~s", [Reason]),
             io:format(
                 standard_error,
-                "Usage: query Module:Function[/Arity] or Module.Function[/Arity]\n",
+                "Usage: query Module:Function[/Arity] or Module.Function[/Arity] for Elixir\n",
                 []
             ),
             {error, Reason}
@@ -409,12 +410,12 @@ query(Opts) ->
 -doc """
 Parse a query string in `Module:Function[/Arity]` format, or `Module.Function[/Arity]` format for Elixir modules.
 
-Returns `{ok, Module, Function, Arity}` or `{ok, Module, Function}`
-when no arity is specified, or `{error, Reason}` on invalid input.
+Returns `{ok, Module, Function, Arity}`, `{ok, Module, Function}` or `{ok, Module}`, or `{error, Reason}` on invalid input.
 """.
 -spec parse_query_string(string()) ->
     {ok, binary(), binary(), arity()}
     | {ok, binary(), binary()}
+    | {ok, binary()}
     | {error, string()}.
 parse_query_string(Query) ->
     % Try colon separator first (Erlang format)
@@ -491,9 +492,13 @@ parse_query_string(Query) ->
                             {error, "Empty module or function"}
                     end;
                 _ ->
-                    {error,
-                        "Invalid format. Use Module:Function, Module.Function, "
-                        "Module:Function/Arity, or Module.Function/Arity"}
+                    ModBin = case spectrometer_utils:is_elixir_module_name(Query) of
+                        true ->
+                            spectrometer_utils:normalize_module_name(Query, true);
+                        false ->
+                            spectrometer_utils:normalize_module_name(Query, false)
+                    end,
+                    {ok, ModBin}
             end
     end.
 
@@ -518,14 +523,26 @@ show_query({Mod, Fun}) ->
         ArityList ->
             io:format("~ts:~ts supported arities:\n", [Mod, Fun]),
             lists:foreach(
-                fun({Arity, SinceMap, _Removed}) ->
-                    io:format(
-                        "  /~p  (~s)\n",
-                        [
-                            Arity,
-                            format_platform_versions(SinceMap)
-                        ]
-                    )
+                fun({Arity, SinceMap, Removed}) ->
+                    case Removed of
+                        undefined ->
+                            io:format(
+                                "\t/~p  (~s)\n",
+                                [
+                                    Arity,
+                                    format_platform_versions(SinceMap)
+                                ]
+                            );
+                        _ ->
+                            io:format(
+                                "\t/~p  No longer supported. Removed in release ~s (~s)\n",
+                                [
+                                    Arity,
+                                    format_removed(Removed),
+                                    format_platform_versions(SinceMap)
+                                ]
+                            )
+                    end
                 end,
                 ArityList
             )
@@ -533,21 +550,30 @@ show_query({Mod, Fun}) ->
 show_query({Mod, Fun, Arity}) ->
     case support_info({Mod, Fun, Arity}) of
         {true, SinceMap, Removed} ->
-            RemovedStr =
-                case Removed of
-                    undefined -> "";
-                    _ -> ", " ++ format_removed(Removed)
-                end,
-            io:format(
-                "~ts:~ts/~p is SUPPORTED by AtomVM (~s~s)\n",
-                [
-                    Mod,
-                    Fun,
-                    Arity,
-                    format_platform_versions(SinceMap),
-                    RemovedStr
-                ]
-            );
+            case Removed of
+                undefined ->
+                    io:format(
+                        "~ts:~ts/~p is SUPPORTED by AtomVM (~s~s)\n",
+                        [
+                            Mod,
+                            Fun,
+                            Arity,
+                            format_platform_versions(SinceMap),
+                            format_removed(Removed)
+                        ]
+                    );
+                _ ->
+                    io:format(
+                        "~ts:~ts/~p no longer supported. Removed in release ~s (~s)\n",
+                        [
+                            Mod,
+                            Fun,
+                            Arity,
+                            format_removed(Removed),
+                            format_platform_versions(SinceMap)
+                        ]
+                    )
+            end;
         false ->
             io:format(
                 "~ts:~ts/~p is NOT supported by AtomVM\n",
@@ -642,8 +668,7 @@ do_print_supported(Mod) ->
                 standard_error,
                 "Module ~ts not found in AtomVM supported database\n",
                 [format_mod_name(Mod)]
-            ),
-            {error, unsupported}
+            )
     end.
 
 -spec filter_modules_by_type([binary()], atom() | undefined) -> [binary()].
@@ -693,7 +718,7 @@ format_function_line(Fun, Arity, SinceMap, Removed) ->
             _ -> ", " ++ format_removed(Removed)
         end,
     io:format(
-        "  ~ts/~s  (~s~s)\n",
+        "~ts/~s  (~s~s)\n",
         [FunStr, ArityStr, PlatformsStr, RemovedStr]
     ).
 
@@ -734,6 +759,8 @@ format_version_tuple(Version) when is_binary(Version) ->
 %% Format a removed version for display.
 %% {0,7,0} → "REMOVED in v0.7.0"
 -spec format_removed(version_tuple() | undefined) -> string().
+format_removed(undefined) ->
+    "";
 format_removed(Removed) ->
     "REMOVED in " ++ format_version_tuple(Removed).
 

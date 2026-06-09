@@ -301,14 +301,15 @@ Returns `ok` on success, `{error, {clone_failed, Status}}` on failure.
 -endif.
 -spec download_github_repo(string(), string()) -> ok | {error, term()}.
 download_github_repo(CloneUrl, TmpDir) ->
-    case {filelib:is_dir(TmpDir), filelib:is_file(TmpDir)} of
-        {true, _} ->
-            file:del_dir_r(TmpDir);
-        {_, true} ->
-            file:delete(TmpDir);
-        {false, false} ->
-            ok
-    end,
+    _ =
+        case {filelib:is_dir(TmpDir), filelib:is_file(TmpDir)} of
+            {true, _} ->
+                file:del_dir_r(TmpDir);
+            {_, true} ->
+                file:delete(TmpDir);
+            {false, false} ->
+                ok
+        end,
     case os:find_executable("git") of
         false ->
             {error, git_not_found};

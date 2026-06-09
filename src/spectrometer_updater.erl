@@ -11,6 +11,7 @@
 
 -include("function.hrl").
 -include_lib("kernel/include/file.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -moduledoc """
 Scans AtomVM source trees to auto-generate the supported functions database
@@ -179,16 +180,16 @@ update(Opts) ->
 
     case filelib:is_file(OutputFile) andalso not Force of
         true ->
-            io:format("Output file already exists: ~s\n", [OutputFile]),
-            io:format("Use --force to overwrite.\n"),
+            ?LOG_ERROR("Output file already exists: ~s", [OutputFile]),
+            ?LOG_ERROR("Use --force to overwrite."),
             {error, {file_exists, OutputFile}};
         _ ->
             case update_datafile(Opts, OutputFile) of
                 ok ->
                     ok;
                 {error, Reason} ->
-                    io:format(
-                        standard_error, "Error: unable to update data, ~p\n", [
+                    ?LOG_ERROR(
+                        standard_error, "Error: unable to update data, ~p", [
                             Reason
                         ]
                     ),
@@ -260,26 +261,26 @@ update_datafile(Opts, OutputFile) ->
     ExistingDB =
         case file:consult(OutputFile) of
             {ok, [Data]} when is_list(Data) ->
-                io:format("Loading existing data set from ~s\n", [OutputFile]),
+                ?LOG_DEBUG("Loading existing data set from ~s", [OutputFile]),
                 build_db_from_list(Data);
             {error, enoent} ->
                 % If no user cache exists, try to load from bundled data for initial values
                 Datafile = spectrometer_utils:bundled_data_path(),
                 case file:consult(Datafile) of
                     {ok, [Data]} when is_list(Data) ->
-                        io:format(
-                            "Loading bundled data set from ~s\n", [Datafile]
+                        ?LOG_DEBUG(
+                            "Loading bundled data from ~s", [Datafile]
                         ),
                         build_db_from_list(Data);
                     {ok, _} ->
-                        io:format(
-                            "Ignoring invalid data set in ~s, starting with empty data\n",
+                        ?LOG_WARNING(
+                            "Ignoring invalid data set in ~s, starting with empty data",
                             [OutputFile]
                         ),
                         #{};
                     {error, enoent} ->
-                        io:format(
-                            "No existing data found, starting with empty data set\n"
+                        ?LOG_DEBUG(
+                            "No existing data found, starting with empty data"
                         ),
                         #{};
                     {error, Reason} ->
@@ -296,7 +297,7 @@ update_datafile(Opts, OutputFile) ->
             RepoDir =
                 case maps:find(atomvm_dir, Opts) of
                     {ok, Dir} ->
-                        io:format("Using local AtomVM repo: ~s\n", [Dir]),
+                        ?LOG_DEBUG("Using local AtomVM repo: ~s", [Dir]),
                         Dir;
                     error ->
                         ClonedDir =
@@ -369,10 +370,10 @@ update_datafile(Opts, OutputFile) ->
                         ok ->
                             spectrometer_atomvm:flush_db_cache(),
                             _ = spectrometer_atomvm:load_db(),
-                            io:format("Done.\n"),
+                            ?LOG_INFO("Updated supported functions data."),
                             ok;
                         {error, Err4} ->
-                            io:format("Error writing database file ~p: ~p\n", [
+                            ?LOG_ERROR("Error writing database file ~p: ~p", [
                                 OutputFile, Err4
                             ]),
                             {error, Err4}
@@ -396,7 +397,7 @@ Parses gperf files, platform NIFs, Erlang and Elixir library exports, and
 -spec scan_atomvm_repo(string(), scan_opts(), since()) ->
     #{{binary(), binary(), arity()} => entry()}.
 scan_atomvm_repo(RepoDir, Opts, Since) ->
-    io:format("Scanning AtomVM repo at ~s (since: ~p)\n", [RepoDir, Since]),
+    ?LOG_INFO("Scanning AtomVM repo at ~s (since: ~p)", [RepoDir, Since]),
     LibDir = filename:join(RepoDir, "src/libAtomVM"),
     PlatformsDir = filename:join(RepoDir, "src/platforms"),
     LibsDir = filename:join(RepoDir, "libs"),
@@ -406,44 +407,44 @@ scan_atomvm_repo(RepoDir, Opts, Since) ->
     Acc1 =
         case filelib:is_regular(filename:join(LibDir, "bifs.gperf")) of
             true ->
-                io:format("  Parsing bifs.gperf...\n"),
+                ?LOG_DEBUG("Parsing bifs.gperf"),
                 parse_bifs_gperf(
                     filename:join(LibDir, "bifs.gperf"), Acc0, all, Since
                 );
             false ->
-                io:format("  Skipping bifs.gperf (not found)\n"),
+                ?LOG_DEBUG("Skipping bifs.gperf (not found)"),
                 Acc0
         end,
     Acc2 =
         case filelib:is_regular(filename:join(LibDir, "nifs.gperf")) of
             true ->
-                io:format("  Parsing nifs.gperf...\n"),
+                ?LOG_DEBUG("Parsing nifs.gperf"),
                 parse_nifs_gperf(
                     filename:join(LibDir, "nifs.gperf"), Acc1, all, Since
                 );
             false ->
-                io:format("  Skipping nifs.gperf (not found)\n"),
+                ?LOG_DEBUG("Skipping nifs.gperf (not found)"),
                 Acc1
         end,
-    io:format("  Scanning platform NIFs...\n"),
+    ?LOG_DEBUG("Scanning platform NIFs"),
     Acc3 = scan_platform_nifs(PlatformsDir, Acc2, Since),
-    io:format("  Scanning port drivers...\n"),
+    ?LOG_DEBUG("Scanning port drivers"),
     Acc3b = scan_port_drivers(PlatformsDir, Acc3, Since),
-    io:format("  Scanning platform Erlang sources...\n"),
+    ?LOG_DEBUG("Scanning platform Erlang sources"),
     Acc3c = scan_platform_erlang_sources(PlatformsDir, Acc3b, Since),
-    io:format("  Scanning Erlang library sources...\n"),
+    ?LOG_DEBUG("Scanning Erlang library sources"),
     Acc4 = scan_erlang_libs(LibsDir, Acc3c, Since),
     % Scan Elixir libraries (exavmlib) for def exports
     Acc5 = scan_elixir_libs(LibsDir, Acc4, Since),
-    io:format("  Intersecting platforms with port driver availability...\n"),
+    ?LOG_DEBUG("Intersecting platforms with port driver availability"),
     Acc5b = intersect_port_driver_platforms(Acc5, PlatformsDir, Since),
     case maps:get(tests, Opts, true) of
         true ->
-            io:format("  Scanning test files for external calls...\n"),
+            ?LOG_DEBUG("  Scanning test files for external calls"),
             Acc6 = scan_test_files(TestsDir, Acc5b, Since),
             finalize(Acc6);
         false ->
-            io:format("  Skipping test file scan (disabled)\n"),
+            ?LOG_DEBUG("Skipping test file scan (disabled)"),
             finalize(Acc5b)
     end.
 -spec finalize(map()) -> map().
@@ -451,8 +452,8 @@ scan_atomvm_repo(RepoDir, Opts, Since) ->
 -doc false.
 %% Finalize scan and log results.
 finalize(Acc) ->
-    io:format(
-        "  Found ~p unique module:function/arity entries\n",
+    ?LOG_INFO(
+        "Found ~p unique module:function/arity entries",
         [maps:size(Acc)]
     ),
     Acc.
@@ -507,16 +508,16 @@ write_db_file(Path, Acc) ->
         ok ->
             case file:write_file(Path, Header ++ Content ++ EndLines) of
                 ok ->
-                    io:format(
-                        "Wrote ~p functions across ~p modules to ~s\n",
+                    ?LOG_INFO(
+                        "Wrote ~p functions across ~p modules to ~s",
                         [maps:size(Acc), length(SortedMods), Path]
                     );
                 {error, Reason} ->
-                    io:format("Error writing file ~s: ~p\n", [Path, Reason]),
+                    ?LOG_ERROR("writing file ~s: ~p", [Path, Reason]),
                     {error, Reason}
             end;
         {error, Reason} ->
-            io:format("Error ensuring directory ~s: ~p\n", [Path, Reason]),
+            ?LOG_ERROR("ensuring directory ~s: ~p", [Path, Reason]),
             {error, Reason}
     end.
 
@@ -827,7 +828,7 @@ merge_platforms_all(OldList, NewList) when is_list(OldList), is_list(NewList) ->
 scan_platform_nifs(PlatformsDir, Acc, Since) ->
     case filelib:is_dir(PlatformsDir) of
         false ->
-            io:format("    Platforms dir not found: ~s\n", [PlatformsDir]),
+            ?LOG_WARNING("Platforms dir not found: ~s", [PlatformsDir]),
             Acc;
         true ->
             case file:list_dir(PlatformsDir) of
@@ -844,8 +845,8 @@ scan_platform_nifs(PlatformsDir, Acc, Since) ->
                                     of
                                         Plat when is_atom(Plat) ->
                                             CFiles = find_c_files(PlatDir),
-                                            io:format(
-                                                "    Scanning ~s C source (~p files)...\n",
+                                            ?LOG_DEBUG(
+                                                "Scanning ~s C source (~p files)",
                                                 [Plat, length(CFiles)]
                                             ),
                                             lists:foldl(
@@ -1027,7 +1028,7 @@ parse_nifs_gperf(File, Acc, Platforms, Since) ->
 scan_erlang_libs(LibsDir, Acc, Since) ->
     case filelib:is_dir(LibsDir) of
         false ->
-            io:format("    libs dir not found: ~s\n", [LibsDir]),
+            ?LOG_WARNING("libs dir not found: ~s", [LibsDir]),
             Acc;
         true ->
             Acc1 = scan_lib_group(
@@ -1133,8 +1134,8 @@ scan_lib_group(
                     end,
                     ErlFiles
                 ),
-                io:format(
-                    "    Scanning ~s:~s (~p files, platforms: ~p)~n",
+                ?LOG_DEBUG(
+                    "Scanning ~s:~s (~p files, platforms: ~p)",
                     [
                         LibName,
                         ModuleName,
@@ -1160,8 +1161,8 @@ scan_lib_group(LibsDir, [LibName | Rest], Platforms, Acc, Since) ->
         case filelib:is_dir(LibSrcDir) of
             true ->
                 ErlFiles = find_erl_files(LibSrcDir),
-                io:format(
-                    "    Scanning ~s (~p files, platforms: ~p)~n",
+                ?LOG_DEBUG(
+                    "Scanning ~s (~p files, platforms: ~p)",
                     [LibName, length(ErlFiles), Platforms]
                 ),
                 lists:foldl(
@@ -1322,7 +1323,7 @@ parse_export_list(Content) ->
 scan_test_files(TestsDir, Acc, Since) ->
     case filelib:is_dir(TestsDir) of
         false ->
-            io:format("    tests dir not found: ~s\n", [TestsDir]),
+            ?LOG_WARNING("tests dir not found: ~s", [TestsDir]),
             Acc;
         true ->
             ErlTestsDir = filename:join(TestsDir, "erlang_tests"),
@@ -1342,7 +1343,7 @@ scan_calls_dir(Dir, Label, Acc, Since) ->
     case filelib:is_dir(Dir) of
         true ->
             Files = find_erl_files(Dir),
-            io:format("    Found ~p .erl files in ~s\n", [length(Files), Label]),
+            ?LOG_DEBUG("Found ~p .erl files in ~s", [length(Files), Label]),
             scan_calls(Files, Acc, Since);
         false ->
             Acc
@@ -1759,7 +1760,7 @@ scan_exavmlib_dir(ExavmlibDir, Acc, Platforms, Since) ->
     case filelib:is_dir(ExavmlibDir) of
         true ->
             ExFiles = find_ex_files(ExavmlibDir),
-            io:format("  Scanning exavmlib (~p .ex files)\n", [length(ExFiles)]),
+            ?LOG_DEBUG("Scanning exavmlib (~p .ex files)", [length(ExFiles)]),
             lists:foldl(
                 fun(F, A) ->
                     parse_elixir_file(F, A, Platforms, Since)
@@ -1768,7 +1769,7 @@ scan_exavmlib_dir(ExavmlibDir, Acc, Platforms, Since) ->
                 ExFiles
             );
         false ->
-            io:format("  Skipping exavmlib (not found)\n"),
+            ?LOG_WARNING("Skipping exavmlib (not found)"),
             Acc
     end.
 -spec find_ex_files(string()) -> [string()].
