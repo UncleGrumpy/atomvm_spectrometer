@@ -60,7 +60,6 @@ Version =
         {warnings, [error_handling, unmatched_returns]}
     ]},
     {xref_ignores, [
-        {spectrometer, main, 1},
         {spectrometer_reporter, generate_report, 1},
         {spectrometer_reporter, print_summary, 1},
         {spectrometer_reporter, write_csv, 3}

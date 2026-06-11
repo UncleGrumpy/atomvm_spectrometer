@@ -1,13 +1,20 @@
 %%
+%% Copyright 2026 Paul Guyot <pguyot@kallisys.net>
+%% GitHub Gist @pguyot/beam_stats.escript
+%% https://gist.github.com/pguyot/da327972f1ecdb7041c97addd4e76bb5
+%% 
+%% Adapted for atomvm_spectrometer:
 %% Copyright (c) 2026 Winford (UncleGrumpy) <winford@object.stream>
-%% All rights reserved.
 %%
 %% This is part of atomvm_spectrometer
 %%
+%% SPDX-FileCopyrightText: 2026 Paul Guyot <pguyot@kallisys.net>
 %% SPDX-FileCopyrightText: 2026 Winford (UncleGrumpy)  <winford@object.stream>
 %% SPDX-License-Identifier: Apache-2.0
 
 -module(spectrometer_http).
+
+-include_lib("kernel/include/logger.hrl").
 
 -moduledoc """
 HTTP fetching for GitHub repos and Hex packages.
@@ -15,7 +22,7 @@ HTTP fetching for GitHub repos and Hex packages.
 This module provides the network layer for ecosystem scans and target resolution.
 It uses `httpc` for all HTTP operations (no external CLI dependencies like `gh`).
 
-GitHub repos are fetched via the GitHub Search API with cursor-based pagination
+GitHub repos are fetched via the GitHub Search API with page-based pagination
 by star count. Hex packages are fetched via the Hex API sorted by total downloads.
 """.
 
@@ -33,117 +40,194 @@ by star count. Hex packages are fetched via the Hex API sorted by total download
 -define(HEX_MAX_PAGES, 100).
 
 -doc """
-Fetch GitHub repos via the GitHub Search API with cursor-based pagination.
+Fetch GitHub repos via the GitHub Search API with page-based pagination.
 
 Fetches Erlang repositories sorted by star count, up to `Limit` repos.
 Pass `infinity` to fetch all available repos (capped at the API's
 pagination limits).
 """.
 fetch_github_repos({Limit, MinStars}) ->
-    io:format("Fetching GitHub repos...\n"),
+    fetch_github_repos({Limit, MinStars}, 1).
+
+-doc false.
+fetch_github_repos({Limit, MinStars}, StartPage) ->
+    ?LOG_INFO("Fetching GitHub repos"),
     Max =
         case Limit of
             infinity -> ?GITHUB_MAX_PER_QUERY * 15;
             _ -> Limit
         end,
-    Repos = fetch_github_cursor(MinStars, undefined, [], Max),
-    io:format("  Total: ~p GitHub repos\n", [length(Repos)]),
+    {Repos0, BoundaryStars} = fetch_github_page(MinStars, StartPage, [], Max),
+    Repos =
+        case StartPage =< (?GITHUB_MAX_PER_QUERY div ?GITHUB_PER_PAGE) of
+            true ->
+                fetch_github_repos_below_cap(
+                    MinStars, Repos0, BoundaryStars, Max
+                );
+            false ->
+                Repos0
+        end,
+    ?LOG_INFO("Processing ~p GitHub repos", [length(Repos)]),
     Repos.
 
 -doc false.
-%% Cursor-based GitHub repo fetching by star count range.
--spec fetch_github_cursor(
-    integer() | infinity, integer() | undefined, [map()], integer()
+%% Page-based GitHub repo fetching with a stable star range.
+-spec fetch_github_page(
+    integer() | infinity, pos_integer(), [map()], integer()
+) -> {[map()], integer() | undefined}.
+fetch_github_page(MinStars, Page, Acc, Max) ->
+    fetch_github_page_range(MinStars, undefined, Page, Acc, Max, "desc").
+
+-spec fetch_github_repos_below_cap(
+    integer() | infinity, [map()], integer() | undefined, integer()
 ) -> [map()].
-fetch_github_cursor(_MinStars, _LastStars, Acc, Max) when length(Acc) >= Max ->
-    lists:sublist(Acc, Max);
-fetch_github_cursor(MinStars, LastStars, Acc, Max) when LastStars < MinStars ->
-    lists:sublist(Acc, Max);
-fetch_github_cursor(MinStars, LastStars, Acc, Max) ->
-    Range = star_filter_range(MinStars, LastStars),
-    Remaining = Max - length(Acc),
-    %% Add +2 to fetch, because "erlang/otp" and "atomvm/AtomVM" are filtered from results.
-    Fetch = min(Remaining + 2, ?GITHUB_MAX_PER_QUERY),
-    io:format("  stars:~s ...", [Range]),
-    {Repos0, TotalCount} = fetch_github_query(Range, Fetch),
-    Repos = filter_repos(Repos0, []),
-    io:format(" ~p repos (of ~p available)\n", [length(Repos), TotalCount]),
-    case Repos of
-        [] ->
-            Acc;
-        _ ->
-            NewAcc = Acc ++ Repos,
+fetch_github_repos_below_cap(_MinStars, Acc, _BoundaryStars, Max) when
+    length(Acc) >= Max
+->
+    Acc;
+fetch_github_repos_below_cap(MinStars, Acc, BoundaryStars, Max) when
+    Max >= ?GITHUB_MAX_PER_QUERY, is_integer(BoundaryStars)
+->
+    MinStarsForRange = min_star_floor(MinStars),
+    LowerMaxStars = BoundaryStars - 1,
+    case LowerMaxStars >= MinStarsForRange of
+        true ->
+            {Repos1, _BoundaryStars1} = fetch_github_page_range(
+                MinStarsForRange,
+                LowerMaxStars,
+                1,
+                Acc,
+                Max,
+                "asc"
+            ),
+            Repos1;
+        false ->
+            Acc
+    end;
+fetch_github_repos_below_cap(_MinStars, Acc, _BoundaryStars, _Max) ->
+    Acc.
+
+-spec fetch_github_page_range(
+    integer() | infinity,
+    integer() | undefined,
+    pos_integer(),
+    [map()],
+    integer(),
+    string()
+) -> {[map()], integer() | undefined}.
+fetch_github_page_range(MinStars, MaxStars, Page, Acc, Max, SortOrder) ->
+    fetch_github_page_range(
+        MinStars, MaxStars, Page, Acc, Max, SortOrder, undefined
+    ).
+
+-spec fetch_github_page_range(
+    integer() | infinity,
+    integer() | undefined,
+    pos_integer(),
+    [map()],
+    integer(),
+    string(),
+    integer() | undefined
+) -> {[map()], integer() | undefined}.
+fetch_github_page_range(
+    _MinStars, _MaxStars, _Page, Acc, Max, _SortOrder, BoundaryStars
+) when
+    length(Acc) >= Max
+->
+    {lists:sublist(Acc, Max), BoundaryStars};
+fetch_github_page_range(
+    _MinStars, _MaxStars, Page, Acc, Max, _SortOrder, BoundaryStars
+) when
+    Page > (?GITHUB_MAX_PER_QUERY div ?GITHUB_PER_PAGE)
+->
+    {lists:sublist(Acc, Max), BoundaryStars};
+fetch_github_page_range(
+    MinStars, MaxStars, Page, Acc, Max, SortOrder, BoundaryStars0
+) ->
+    Range = star_filter_range(MinStars, MaxStars),
+    case fetch_github_page(Range, Page, SortOrder) of
+        {[], _TotalCount} ->
+            io:format("\n"),
+            {lists:sublist(Acc, Max), BoundaryStars0};
+        {RawPage, TotalCount} ->
+            NewAcc = Acc ++ RawPage,
+            BoundaryStars = boundary_from_raw_page(
+                Page, RawPage, BoundaryStars0
+            ),
+            io:format(
+                "\r\tstars:~s page ~p (~s) ... ~p repos (of ~p available)",
+                [Range, Page, SortOrder, length(NewAcc), TotalCount]
+            ),
             case length(NewAcc) >= Max of
                 true ->
-                    lists:sublist(NewAcc, Max);
+                    io:format("\n"),
+                    {lists:sublist(NewAcc, Max), BoundaryStars};
                 false ->
-                    Stars = [maps:get(stars, R) || R <- Repos],
-                    MinStarsInBatch = lists:min(Stars),
-                    fetch_github_cursor(
-                        MinStars, MinStarsInBatch - 1, NewAcc, Max
+                    fetch_github_page_range(
+                        MinStars,
+                        MaxStars,
+                        Page + 1,
+                        NewAcc,
+                        Max,
+                        SortOrder,
+                        BoundaryStars
                     )
             end
     end.
 
 -spec star_filter_range(integer() | infinity, integer() | undefined) ->
     string().
-star_filter_range(infinity, _LastStars) ->
+star_filter_range(infinity, undefined) ->
     ">=1";
+star_filter_range(infinity, MaxStars) when is_integer(MaxStars) ->
+    io_lib:format(">=1..~p", [MaxStars]);
 star_filter_range(MinStars, undefined) ->
     io_lib:format(">=~p", [MinStars]);
-star_filter_range(MinStars, LastStars) ->
-    io_lib:format("~p..~p", [MinStars, LastStars]).
+star_filter_range(MinStars, MaxStars) ->
+    io_lib:format("~p..~p", [MinStars, MaxStars]).
 
--spec filter_repos([map()], [map()]) -> [map()].
-filter_repos([], Acc) ->
-    lists:reverse(Acc);
-filter_repos([Repo | Rest], Acc) ->
-    case string:find(maps:get(full_name, Repo), "erlang/otp") of
-        nomatch ->
-            case string:find(maps:get(full_name, Repo), "atomvm/AtomVM") of
-                nomatch ->
-                    filter_repos(Rest, [Repo | Acc]);
-                _ ->
-                    filter_repos(Rest, Acc)
-            end;
-        _ ->
-            filter_repos(Rest, Acc)
-    end.
+-dialyzer({nowarn_function, [boundary_from_raw_page/3]}).
+%% The [] clause is a defensive fallback; Dialyzer's success typing
+%% for fetch_github_page/3 infers a non-empty list, making this
+%% clause unreachable per static analysis. The clause is kept for
+%% runtime safety in case the API behavior changes.
+-spec boundary_from_raw_page(pos_integer(), [map()], integer() | undefined) ->
+    integer() | undefined.
+boundary_from_raw_page(_Page, [], BoundaryStars) ->
+    BoundaryStars;
+boundary_from_raw_page(_Page, RawPage, _BoundaryStars) ->
+    Stars = [maps:get(stars, Repo) || Repo <- RawPage],
+    lists:min(Stars).
 
--doc false.
-%% Fetch repos for a single star range query.
--spec fetch_github_query(string(), integer()) -> {[map()], non_neg_integer()}.
-fetch_github_query(StarRange, Max) ->
-    Query = lists:flatten("language:Erlang stars:" ++ StarRange),
-    Limit = min(Max, ?GITHUB_MAX_PER_QUERY),
-    fetch_github_pages(Query, 1, [], Limit, 0).
+-spec min_star_floor(integer() | infinity) -> integer().
+min_star_floor(infinity) ->
+    1;
+min_star_floor(MinStars) when is_integer(MinStars) ->
+    MinStars.
 
 -doc false.
-%% Paginated GitHub API fetcher.
--spec fetch_github_pages(
-    string(), pos_integer(), [map()], non_neg_integer(), non_neg_integer()
+%% Fetch one raw GitHub Search API page.
+-spec fetch_github_page(
+    string(), pos_integer(), string()
 ) -> {[map()], non_neg_integer()}.
-fetch_github_pages(_Query, _Page, Acc, Max, TC) when length(Acc) >= Max ->
-    {lists:sublist(lists:reverse(Acc), Max), TC};
-fetch_github_pages(_Query, Page, Acc, _Max, TC) when
-    Page > (?GITHUB_MAX_PER_QUERY div ?GITHUB_PER_PAGE)
-->
-    {lists:reverse(Acc), TC};
-fetch_github_pages(Query, Page, Acc, Max, TC) ->
+fetch_github_page(StarRange, Page, SortOrder) ->
+    Query = lists:flatten("language:Erlang stars:" ++ StarRange),
     Url = io_lib:format(
         "https://api.github.com/search/repositories"
         "?q=~s"
         "&sort=stars"
-        "&order=desc"
+        "&order=~s"
         "&per_page=~p"
         "&page=~p",
-        [uri_string:quote(Query), ?GITHUB_PER_PAGE, Page]
+        [uri_string:quote(Query), SortOrder, ?GITHUB_PER_PAGE, Page]
     ),
     case fetch(lists:flatten(Url)) of
         {ok, Body} ->
             try
                 case json:decode(Body) of
-                    #{<<"total_count">> := NewTC, <<"items">> := Items} when
+                    #{
+                        <<"total_count">> := TotalCount, <<"items">> := Items
+                    } when
                         is_list(Items), length(Items) > 0
                     ->
                         Repos = lists:map(
@@ -165,22 +249,15 @@ fetch_github_pages(Query, Page, Acc, Max, TC) ->
                             end,
                             Items
                         ),
-                        fetch_github_pages(
-                            Query,
-                            Page + 1,
-                            lists:reverse(Repos) ++ Acc,
-                            Max,
-                            NewTC
-                        );
+                        {Repos, TotalCount};
                     _ ->
-                        {lists:reverse(Acc), TC}
+                        {[], 0}
                 end
             catch
-                _:_ ->
-                    {lists:reverse(Acc), TC}
+                _:_ -> {[], 0}
             end;
         {error, _Reason} ->
-            {lists:reverse(Acc), TC}
+            {[], 0}
     end.
 
 -doc """
@@ -196,8 +273,8 @@ fetch_hex_packages(Limit) ->
             infinity -> ?HEX_MAX_PAGES * ?HEX_PER_PAGE;
             _ -> min(Limit, ?HEX_MAX_PAGES * ?HEX_PER_PAGE)
         end,
-    io:format("Fetching Hex packages (up to ~p)...\n", [Max]),
-    fetch_hex_pages(1, [], Max).
+    ?LOG_INFO("Fetching Hex packages (up to ~p)...\n", [Max]),
+    fetch_hex_pages(StartPage, [], Max).
 
 -doc false.
 %% Paginated Hex API fetcher.
@@ -206,15 +283,19 @@ fetch_hex_pages(Page, Acc, Max) when
     Page > ?HEX_MAX_PAGES; length(Acc) >= Max
 ->
     Packages = lists:sublist(lists:reverse(Acc), Max),
-    io:format("  Found ~p Hex packages\n", [length(Packages)]),
+    ?LOG_INFO("Found ~p Hex packages\n", [length(Packages)]),
     Packages;
 fetch_hex_pages(Page, Acc, Max) ->
     Url = io_lib:format(
         "https://hex.pm/api/packages?sort=total_downloads&per_page=~p&page=~p",
         [?HEX_PER_PAGE, Page]
     ),
+    ?LOG_DEBUG("fetch url: ~s", [lists:flatten(Url)]),
     case fetch(lists:flatten(Url)) of
         {ok, Body} ->
+            ?LOG_DEBUG("fetch body prefix: ~p", [
+                binary:part(Body, 0, min(byte_size(Body), 200))
+            ]),
             try
                 case json:decode(Body) of
                     Items when is_list(Items), length(Items) > 0 ->
@@ -242,7 +323,7 @@ fetch_hex_pages(Page, Acc, Max) ->
                             end,
                             Items
                         ),
-                        io:format("  Page ~p: ~p packages\n", [
+                        ?LOG_DEBUG("Page ~p: ~p packages\n", [
                             Page, length(Packages)
                         ]),
                         fetch_hex_pages(
@@ -256,7 +337,7 @@ fetch_hex_pages(Page, Acc, Max) ->
                     lists:reverse(Acc)
             end;
         {error, Reason} ->
-            io:format("  Page ~p: HTTP error: ~p\n", [Page, Reason]),
+            ?LOG_ERROR("Page ~p: HTTP error: ~p\n", [Page, Reason]),
             lists:reverse(Acc)
     end.
 
@@ -295,9 +376,16 @@ Sets `GIT_TERMINAL_PROMPT=0` to prevent credential prompts in CI.
 Returns `ok` on success, `{error, {clone_failed, Status}}` on failure.
 """.
 -ifdef(TEST).
--define(GIT_OPTS, [{"GIT_ASKPASS", "false"}, {"GIT_TERMINAL_PROMPT", "0"}]).
+-define(GIT_ENV, [
+    {"PATH", os:getenv("PATH", "/bin:/usr/bin:/usr/local/bin")},
+    {"GIT_TERMINAL_PROMPT", "0"},
+    {"SSH_ASKPASS", false}
+]).
 -else.
--define(GIT_OPTS, [{"GIT_TERMINAL_PROMPT", "0"}]).
+-define(GIT_ENV, [
+    {"PATH", os:getenv("PATH", "/bin:/usr/bin:/usr/local/bin")},
+    {"GIT_TERMINAL_PROMPT", "0"}
+]).
 -endif.
 -spec download_github_repo(string(), string()) -> ok | {error, term()}.
 download_github_repo(CloneUrl, TmpDir) ->
@@ -320,7 +408,7 @@ download_github_repo(CloneUrl, TmpDir) ->
                     {args, [
                         "clone", "--depth", "1", "--quiet", CloneUrl, TmpDir
                     ]},
-                    {env, ?GIT_OPTS},
+                    {env, ?GIT_ENV},
                     exit_status
                 ]
             ),
@@ -525,13 +613,23 @@ ssl_options(Hostname) ->
 
 -doc false.
 %% Fetch a URL and return the body on success.
+-spec github_headers() -> [{string(), string()}].
+github_headers() ->
+    [
+        {"user-agent", "atomvm_spectrometer/1.0"},
+        {"accept", "application/vnd.github+json"},
+        {"x-github-api-version", "2022-11-28"}
+    ].
+
 -spec fetch(string()) -> {ok, binary()} | {error, term()}.
 fetch(Url) ->
+    {ok, _Started} = application:ensure_all_started(inets),
+    {ok, _StartedSsl} = application:ensure_all_started(ssl),
     Hostname = hostname_from_url(Url),
     case
         httpc:request(
             get,
-            {Url, [{"user-agent", "atomvm_spectrometer/1.0"}]},
+            {Url, github_headers()},
             [
                 {timeout, 30000},
                 {connect_timeout, 10000},

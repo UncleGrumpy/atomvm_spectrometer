@@ -394,6 +394,48 @@ integration_hex_small_package_test_() ->
             {"skipped (SKIP_NETWORK_TESTS set)", fun() -> ok end}
     end.
 
+fetch_github_repos_small_limit_test_() ->
+    {"fetch_github_repos with limit 50 returns exactly 50 repos", fun() ->
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                Repos = spectrometer_http:fetch_github_repos({50, 1}),
+                ?assertEqual(50, length(Repos));
+            _ ->
+                ok
+        end
+    end}.
+
+fetch_github_repos_stable_range_test_() ->
+    {"fetch_github_repos does not collapse star range prematurely", fun() ->
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                Repos = spectrometer_http:fetch_github_repos({10, 2000}),
+                ?assert(length(Repos) >= 1),
+                lists:foreach(
+                    fun(R) ->
+                        ?assert(maps:get(stars, R) >= 2000)
+                    end,
+                    Repos
+                );
+            _ ->
+                ok
+        end
+    end}.
+
+fetch_github_repos_no_duplicates_test_() ->
+    {"fetch_github_repos returns unique repos across pages", fun() ->
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                Repos = spectrometer_http:fetch_github_repos({150, 1}),
+                ?assert(length(Repos) >= 100),
+                FullNames = [maps:get(full_name, R) || R <- Repos],
+                UniqueNames = lists:usort(FullNames),
+                ?assertEqual(length(UniqueNames), length(FullNames));
+            _ ->
+                ok
+        end
+    end}.
+
 %% =============================================================================
 %% Test helpers
 %% =============================================================================

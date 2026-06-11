@@ -30,7 +30,6 @@ directory removal, and GitHub URL normalization for deduplication.
     normalize_module_name/2,
     normalize_platform_name/1,
     purge_dir/1,
-    run_git_command/2,
     start_applications/0,
     user_cache_path/0,
     user_db_file/0,
@@ -199,35 +198,24 @@ purge_dir(Dir) ->
     end.
 
 -doc "Run a git command safely using open_port with spawn_executable, with environment vars".
--spec run_git_command([string()], [{string(), string()}]) ->
+-spec run_git_command([string()], [{string(), string()}] | '[]') ->
     {ok, string()} | {error, term()}.
 run_git_command(Args, EnvVars) ->
     Cmd = "git",
-    case find_executable(Cmd) of
-        {ok, ExecPath} ->
-            PortOpts = [{args, Args}, exit_status, {line, 16384}],
-            PortOpts1 =
-                case EnvVars of
-                    [] -> PortOpts;
-                    _ -> [{env, EnvVars} | PortOpts]
-                end,
+    case os:find_executable(Cmd) of
+        false ->
+            {error, {executable_not_found, Cmd}};
+        ExecPath ->
+            PortOpts = [
+                {args, Args}, exit_status, {line, 16384}, {env, EnvVars}
+            ],
             try
-                Port = open_port({spawn_executable, ExecPath}, PortOpts1),
+                Port = open_port({spawn_executable, ExecPath}, PortOpts),
                 gather_git_output(Port, [])
             catch
                 error:Reason ->
                     {error, Reason}
-            end;
-        {error, not_found} ->
-            {error, {executable_not_found, Cmd}}
-    end.
-
--doc "Find an executable in PATH or return error if not found".
--spec find_executable(string()) -> {ok, string()} | {error, not_found}.
-find_executable(Cmd) ->
-    case os:find_executable(Cmd) of
-        false -> {error, not_found};
-        Path -> {ok, Path}
+            end
     end.
 
 -doc "Gather output from a port until it closes for git commands".
@@ -242,11 +230,12 @@ gather_git_output(Port, Acc) ->
             gather_git_output(Port, [Line ++ "\n" | Acc]);
         {Port, {data, {noeol, Line}}} ->
             gather_git_output(Port, [Line | Acc])
-    after 120000 ->
+    after 180000 ->
         port_close(Port),
         drain_port_messages(Port),
-        {error, timeout}
+        {error, git_timeout}
     end.
+
 %% Drain any pending messages for a closed port to avoid mailbox pollution.
 -spec drain_port_messages(port()) -> ok.
 drain_port_messages(Port) ->
@@ -311,6 +300,15 @@ optionally a specific tag can be checked out as well. The function returns the p
 repository. Errors during cloning or checkout are printed to the console, and the function halts
 with an error code if cloning fails.
 """.
+-ifdef(TEST).
+-define(GIT_ENV, [
+    {"PATH", os:getenv("PATH", "/bin:/usr/bin:/usr/local/bin")},
+    {"GIT_TERMINAL_PROMPT", "0"},
+    {"SSH_ASKPASS", false}
+]).
+-else.
+-define(GIT_ENV, [{"GIT_TERMINAL_PROMPT", "0"}]).
+-endif.
 -spec clone_temp_repo(string(), string() | undefined) ->
     string() | {error, Reason :: term()}.
 clone_temp_repo(Branch, Tag) ->
@@ -321,7 +319,7 @@ clone_temp_repo(Branch, Tag) ->
         [
             "clone", "--quiet", "--depth", "1", "-b", Branch, Url, TmpDir
         ],
-        [{"GIT_TERMINAL_PROMPT", "0"}]
+        ?GIT_ENV
     ),
     case CloneResult of
         {ok, _} ->
@@ -332,11 +330,11 @@ clone_temp_repo(Branch, Tag) ->
                     ?LOG_DEBUG("Checking out tag ~s", [TagStr]),
                     _ = run_git_command(
                         ["-C", TmpDir, "fetch", "--tags", "--quiet"],
-                        [{"GIT_TERMINAL_PROMPT", "0"}]
+                        ?GIT_ENV
                     ),
                     CheckoutResult = run_git_command(
                         ["-C", TmpDir, "checkout", "--quiet", TagStr],
-                        [{"GIT_TERMINAL_PROMPT", "0"}]
+                        ?GIT_ENV
                     ),
                     case CheckoutResult of
                         {ok, _} ->

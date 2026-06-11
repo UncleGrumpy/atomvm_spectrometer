@@ -344,7 +344,13 @@ merge_stats(New, Acc) ->
     ).
 
 -spec load_ecosystem_state() ->
-    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}}.
+    #{
+        {binary(), binary(), arity()} => #{
+            calls => non_neg_integer(),
+            repo_count => non_neg_integer(),
+            callers => ordsets:ordset(non_neg_integer())
+        }
+    }.
 load_ecosystem_state() ->
     CacheDir = spectrometer_utils:user_cache_path(),
     StateFile = filename:join(CacheDir, ?ECOSYSTEM_STATE),
@@ -457,7 +463,11 @@ load_filter_data(Opts) ->
             case load_ecosystem_state() of
                 Stats when map_size(Stats) > 0 ->
                     maps:fold(
-                        fun({ModBin, FunBin, Arity}, {Calls, RepoCount}, Acc) ->
+                        fun(
+                            {ModBin, FunBin, Arity},
+                            #{calls := Calls, repo_count := RepoCount},
+                            Acc
+                        ) ->
                             [
                                 {
                                     binary_to_list(ModBin),
@@ -472,9 +482,9 @@ load_filter_data(Opts) ->
                         [],
                         Stats
                     );
-                _ ->
+                #{} ->
                     {error,
-                        "No ecosystem state file found. Run 'ecosystem' command first."}
+                        "Ecosystem state file found but no function calls were detected. This may happen if scanned repositories have parse errors or missing dependencies."}
             end
     end.
 

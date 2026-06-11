@@ -837,34 +837,47 @@ format_platforms_test_() ->
     end}.
 
 merge_repo_stats_test_() ->
-    {"merges repository statistics", fun() ->
+    {"merges repository statistics with caller tracking", fun() ->
         RepoStats = #{
             {lists, map, 2} => 10,
             {io, format, 2} => 5
         },
         GlobalStats = #{
-            {lists, map, 2} => {20, 2},
-            {string, len, 1} => {7, 1}
+            {lists, map, 2} => #{
+                calls => 20, repo_count => 2, callers => ordsets:from_list([1])
+            },
+            {string, len, 1} => #{
+                calls => 7, repo_count => 1, callers => ordsets:from_list([1])
+            }
         },
-        Result = spectrometer_ecosystem:merge_repo_stats(
-            RepoStats, GlobalStats
+        Result = spectrometer_ecosystem_coordinator:merge_repo_stats_with_callers(
+            RepoStats, 2, GlobalStats
         ),
-        %% Should sum total calls and repo count
-        {TotalCalls1, RepoCount1} = maps:get({lists, map, 2}, Result),
+        #{
+            calls := TotalCalls1,
+            repo_count := RepoCount1,
+            callers := Callers1
+        } = maps:get({lists, map, 2}, Result),
         ?assertEqual(30, TotalCalls1),
         ?assertEqual(3, RepoCount1),
-        {_, RepoCount2} = maps:get({io, format, 2}, Result),
-        ?assertEqual(1, RepoCount2)
+        ?assertEqual(ordsets:from_list([1, 2]), Callers1),
+        #{
+            calls := _,
+            repo_count := RepoCount2,
+            callers := Callers2
+        } = maps:get({io, format, 2}, Result),
+        ?assertEqual(1, RepoCount2),
+        ?assertEqual(ordsets:from_list([2]), Callers2)
     end}.
 
 work_key_test_() ->
     {"generates unique work keys", fun() ->
         ?assertEqual(
-            "github:user/repo",
+            <<"github:user/repo">>,
             spectrometer_ecosystem:work_key(github, #{full_name => "user/repo"})
         ),
         ?assertEqual(
-            "hex:jsx",
+            <<"hex:jsx">>,
             spectrometer_ecosystem:work_key(hex, #{name => "jsx"})
         )
     end}.

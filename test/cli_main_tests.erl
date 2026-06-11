@@ -37,7 +37,11 @@ ensure_atomvm_repo() ->
                 "https://github.com/atomvm/AtomVM.git",
                 AtomVMDir
             ],
-            [{"GIT_TERMINAL_PROMPT", "0"}]
+            [
+                {"GIT_TERMINAL_PROMPT", "0"},
+                {"PATH", os:getenv("PATH", "/bin:/usr/bin:/usr/local/bin")},
+                {"SSH_ASKPASS", false}
+            ]
         )
     of
         {ok, ""} ->

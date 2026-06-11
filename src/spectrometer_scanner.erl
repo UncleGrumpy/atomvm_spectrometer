@@ -23,8 +23,14 @@ keys to call counts, which is consumed by the analyzer and reporter modules.
 Binary keys prevent atom table exhaustion when scanning large ecosystems.
 """.
 
--export([scan_directory/1, parse_calls/1]).
+-export([
+    scan_directory/1, scan_directory/2,
+    parse_calls/1,
+    parse_file/1, parse_file/2,
+    find_erl_files/1
+]).
 
+-include_lib("kernel/include/logger.hrl").
 -include_lib("kernel/include/file.hrl").
 
 -doc """
@@ -48,13 +54,29 @@ and values are the number of times that function was called across all files.
 -spec scan_directory(Dir :: string()) ->
     #{{binary(), binary(), non_neg_integer()} => non_neg_integer()}.
 scan_directory(Dir) ->
+    scan_directory(Dir, []).
+
+-spec scan_directory(string(), [string()]) ->
+    #{{binary(), binary(), non_neg_integer()} => non_neg_integer()}.
+scan_directory(Dir, IncludePaths) ->
+    ?LOG_DEBUG("Scanner: scan_directory entered", []),
+    ?LOG_DEBUG("Scanner: scan_directory FUNCTION ENTERED", []),
+    ?LOG_DEBUG("Scanner: scan_directory called for ~p with ~p include paths", [
+        Dir, IncludePaths
+    ]),
     ErlFiles = find_erl_files(Dir),
+    ?LOG_DEBUG("Scanner: found ~p .erl files in ~p", [length(ErlFiles), Dir]),
+    ?LOG_DEBUG("Scanner: include paths: ~p", [IncludePaths]),
     lists:foldl(
         fun(File, Acc) ->
-            case parse_file(File) of
+            case parse_file(File, IncludePaths) of
                 {ok, Calls} ->
+                    ?LOG_DEBUG("Scanner: parsed ~p, found ~p calls", [
+                        File, maps:size(Calls)
+                    ]),
                     merge_file_calls(Calls, Acc);
-                {error, _} ->
+                {error, Reason} ->
+                    ?LOG_DEBUG("Scanner: failed to parse ~p: ~p", [File, Reason]),
                     Acc
             end
         end,
@@ -67,10 +89,9 @@ scan_directory(Dir) ->
 -spec find_erl_files(string()) -> [string()].
 find_erl_files(Dir) ->
     find_erl_files(Dir, []).
-
--doc false.
 %% Accumulator variant of find_erl_files/1.
 find_erl_files(Dir, Acc) ->
+    ?LOG_DEBUG("Scanner: find_erl_files/2 entered", []),
     case file:list_dir(Dir) of
         {ok, Entries} ->
             lists:foldl(
@@ -102,26 +123,40 @@ find_erl_files(Dir, Acc) ->
     end.
 
 -doc false.
-%% Parse a single .erl file using epp_dodger for robust parsing.
+%% Parse a single .erl file in the given paths using epp_dodger for robust parsing.
 %% Returns {ok, Calls} where Calls is a map of {ModBin,FunBin,Arity} => Count,
 %% or {error, Reason} on failure.
 -spec parse_file(string()) -> {ok, map()} | {error, term()}.
 parse_file(File) ->
+    parse_file(File, []).
+
+-spec parse_file(string(), [string()]) -> {ok, map()} | {error, term()}.
+parse_file(File, IncludePaths) ->
+    ?LOG_DEBUG("Scanner: parse_file called for ~p with include paths ~p", [
+        File, IncludePaths
+    ]),
+    ?LOG_DEBUG("Scanner: epp_dodger available: ~p", [code:which(epp_dodger)]),
     try
-        case epp_dodger:parse_file(File) of
+        Result = epp_dodger:parse_file(File, [{i, Path} || Path <- IncludePaths]),
+        ?LOG_DEBUG("Scanner: epp_dodger returned ~p", [Result]),
+        case Result of
             {ok, Forms} ->
+                ?LOG_DEBUG("Scanner: got forms, extracting calls", []),
                 Calls = lists:foldl(
                     fun extract_calls/2,
                     #{},
                     Forms
                 ),
+                ?LOG_DEBUG("Scanner: extracted ~p calls", [maps:size(Calls)]),
                 {ok, Calls};
             {error, Reason} ->
+                ?LOG_DEBUG("Scanner: epp_dodger error: ~p", [Reason]),
                 {error, Reason}
         end
     catch
-        _:Err ->
-            {error, Err}
+        Class:Err ->
+            ?LOG_DEBUG("Scanner: caught ~p:~p", [Class, Err]),
+            {error, {Class, Err}}
     end.
 
 -doc false.

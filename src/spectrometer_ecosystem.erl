@@ -12,48 +12,23 @@
 
 -module(spectrometer_ecosystem).
 
+-include_lib("kernel/include/logger.hrl").
 -include("ecosystem.hrl").
 
 -export([run/1]).
 
--define(SAVE_INTERVAL, 10).
-
 -type work_item() :: {github | hex, map()}.
--type coordinator_state() :: #{
-    work => [work_item()],
-    scanned => sets:set(map()),
-    stats => #{
-        {binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}
-    },
-    total_processed => non_neg_integer(),
-    total_work => non_neg_integer(),
-    since_save => non_neg_integer(),
-    active_workers => non_neg_integer(),
-    worker_monitors => #{reference() => pid()},
-    parent => pid()
-}.
 
--doc false.
+-doc """
+Run the ecosystem scan using distributed worker nodes.
+""".
 -spec run(atomvm_spectrometer:opts_map()) -> ok | {error, term()}.
 run(Opts) ->
     try
-        case spectrometer_utils:start_applications() of
-            {error, already_started} ->
-                ok;
-            {error, Reason0} ->
-                io:format(
-                    "Failed to start required applications: ~p\n",
-                    [Reason0]
-                ),
-                error(Reason0);
-            ok ->
-                ok
-        end,
-
-        {Scanned, Stats, TotalProcessed} =
+        {Scanned, Stats, PackageMap, TotalProcessed} =
             case maps:get(resume, Opts) of
                 true -> load_state();
-                false -> {sets:new([{version, 2}]), #{}, 0}
+                false -> {#{}, #{}, #{}, 0}
             end,
 
         Limit = maps:get(limit, Opts),
@@ -76,29 +51,20 @@ run(Opts) ->
 
         {Repos, Packages} = deduplicate(GithubRepos, HexPackages),
 
-        io:format(
-            "Work items: ~p GitHub repos, ~p Hex packages\n",
-            [length(Repos), length(Packages)]
+        ?LOG_INFO(
+            "Work items: ~p GitHub repos, ~p Hex packages",
+            [length(Repos1), length(Packages1)]
         ),
 
         Work0 = [{github, R} || R <- Repos] ++ [{hex, P} || P <- Packages],
-        Work = lists:filter(
-            fun({Type, Item}) ->
-                Key = work_key(Type, Item),
-                not sets:is_element(Key, Scanned)
-            end,
-            Work0
-        ),
+        Work = filter_scanned(Work0, Scanned),
 
-        io:format(
-            "Items to scan: ~p (skipping ~p already scanned)\n",
+        ?LOG_NOTICE(
+            "Items to scan: ~p (skipping ~p already scanned)",
             [length(Work), length(Work0) - length(Work)]
         ),
 
-        case run_coordinator(Work, Scanned, Stats, TotalProcessed, Opts) of
-            ok -> ok;
-            {error, Reason} -> error(Reason)
-        end
+        run_scan(Work, Scanned, Stats, PackageMap, TotalProcessed, Opts)
     catch
         error:R1:_ ->
             {error, R1};
@@ -106,12 +72,146 @@ run(Opts) ->
             {error, {Class, R2}}
     end.
 
--doc """
-Remove duplicate work items between GitHub and Hex sources.
+-doc false.
+configure_cache_dir(Opts) ->
+    case maps:get(cache_dir, Opts, undefined) of
+        undefined -> ok;
+        CacheDir -> application:set_env(spectrometer, cache_dir, CacheDir)
+    end.
 
-Returns `{GithubRepos, FilteredHexPackages}` where Hex packages whose
-GitHub URL matches an already-included GitHub repo are removed.
-""".
+-doc "Dispatch to distributed or local scan based on mode".
+run_scan(Work, Scanned, Stats, PackageMap, TotalProcessed, Opts) ->
+    run_distributed_scan(
+        Work, Scanned, Stats, PackageMap, TotalProcessed, Opts
+    ).
+
+-doc false.
+fetch_initial_sources(
+    Limit, Stars, GithubEnabled, HexEnabled, GithubStartPage, HexStartPage
+) ->
+    {GithubRepos, GithubFetched} =
+        case GithubEnabled of
+            true ->
+                GithubRepos0 = spectrometer_http:fetch_github_repos(
+                    {Limit, Stars}, GithubStartPage
+                ),
+                {GithubRepos0, true};
+            false ->
+                {[], true}
+        end,
+    {HexPackages, HexFetched} =
+        case HexEnabled of
+            true ->
+                HexPackages0 = spectrometer_http:fetch_hex_packages(
+                    remaining_limit(Limit, length(GithubRepos)), HexStartPage
+                ),
+                {HexPackages0, true};
+            false ->
+                {[], true}
+        end,
+    {GithubRepos, HexPackages, GithubFetched, HexFetched}.
+
+-doc false.
+resume_start_page(_Scanned, _Source, false) ->
+    1;
+resume_start_page(Scanned, Source, true) ->
+    scanned_source_count(Scanned, Source) div ?ECOSYSTEM_PAGE_SIZE + 1.
+
+scanned_source_count(Scanned, Source) ->
+    Prefix = source_scanned_prefix(Source),
+    maps:fold(
+        fun(Key, _PackageID, Acc) ->
+            case binary:match(Key, Prefix) of
+                nomatch -> Acc;
+                {0, _} -> Acc + 1
+            end
+        end,
+        0,
+        Scanned
+    ).
+
+-doc false.
+source_scanned_prefix(github) ->
+    <<"github:">>;
+source_scanned_prefix(hex) ->
+    <<"hex:">>.
+
+-doc false.
+remaining_limit(infinity, _GithubCount) ->
+    infinity;
+remaining_limit(Limit, GithubCount) ->
+    max(0, Limit - GithubCount).
+
+-doc "Distributed scan using remote worker nodes".
+-spec run_distributed_scan(
+    [work_item()],
+    #{binary() => non_neg_integer()},
+    #{_ => _},
+    #{non_neg_integer() => binary()},
+    non_neg_integer(),
+    atomvm_spectrometer:opts_map()
+) -> ok | {error, term()}.
+run_distributed_scan(Work, Scanned, Stats, PackageMap, TotalProcessed, Opts) ->
+    Cookie = generate_cookie(),
+    %% TODO: Fix this to use find executable and open_port spawn_executable and check for errors.
+    _ = os:cmd("epmd -daemon"),
+    %% Start as a distributed node so worker BEAM nodes can connect
+    NodeName = list_to_atom(
+        "spec_controller_" ++
+            integer_to_list(erlang:unique_integer([positive]))
+    ),
+    case net_kernel:start([NodeName, shortnames]) of
+        {ok, _} ->
+            ok;
+        {error, {already_started, _}} ->
+            ok;
+        {error, NetReason} ->
+            ?LOG_WARNING("Warning: Failed to start net_kernel: ~p", [NetReason]),
+            ?LOG_WARNING("Worker nodes may not be able to connect.")
+    end,
+    %% Set cookie AFTER net_kernel:start so we have a real node name
+    erlang:set_cookie(node(), Cookie),
+
+    case spectrometer_ecosystem_sup:start_link() of
+        {ok, _SupPid} ->
+            ok;
+        {error, {already_started, _SupPid}} ->
+            ok
+    end,
+
+    %% Coordinator is already started by the supervisor, just use it
+    CoordinatorPid = whereis(spectrometer_ecosystem_coordinator),
+    spectrometer_ecosystem_coordinator:start_work(
+        Work, Scanned, Stats, PackageMap, TotalProcessed, Opts, self()
+    ),
+
+    NumWorkers = maps:get(workers, Opts, 4),
+    lists:foreach(
+        fun(_) ->
+            spectrometer_ecosystem_worker_sup:start_worker(
+                #{cookie => Cookie}
+            )
+        end,
+        lists:seq(1, NumWorkers)
+    ),
+
+    CoordinatorPid = whereis(spectrometer_ecosystem_coordinator),
+    Ref = erlang:monitor(process, CoordinatorPid),
+    receive
+        {coordinator_done, _FinalStats} ->
+            erlang:demonitor(Ref, [flush]),
+            ok;
+        {error, Reason} ->
+            erlang:demonitor(Ref, [flush]),
+            error(Reason);
+        {'DOWN', Ref, process, CoordinatorPid, Reason} ->
+            error({coordinator_died, Reason})
+    after 3600000 ->
+        erlang:demonitor(Ref, [flush]),
+        error(coordinator_timeout)
+    end.
+
+-doc "Remove duplicate work items between GitHub and Hex sources".
 -spec deduplicate([map()], [map()]) -> {[map()], [map()]}.
 deduplicate(GithubRepos, HexPackages) ->
     GithubUrls = sets:from_list(
@@ -139,346 +239,147 @@ deduplicate(GithubRepos, HexPackages) ->
     ),
     {GithubRepos, FilteredHex}.
 
--doc """
-Generate a unique string key for a work item.
-""".
--spec work_key(github | hex, map()) -> string().
-work_key(github, #{full_name := Name}) -> "github:" ++ Name;
-work_key(hex, #{name := Name}) -> "hex:" ++ Name.
-
--spec run_coordinator(
-    [work_item()],
-    sets:set(map()),
-    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}},
-    non_neg_integer(),
-    atomvm_spectrometer:opts_map()
-) ->
-    ok | {error, term()}.
-run_coordinator(Work, Scanned, Stats, TotalProcessed, Opts) ->
-    NumWorkers = maps:get(workers, Opts),
-    case NumWorkers < 1 of
-        true ->
-            {error, {invalid_workers, NumWorkers}};
-        false ->
-            do_run_coordinator(
-                Work, Scanned, Stats, TotalProcessed, Opts, NumWorkers
-            )
-    end.
-
--spec do_run_coordinator(
-    list(), map(), map(), non_neg_integer(), map(), pos_integer()
-) -> ok | {error, term()}.
-do_run_coordinator(Work, Scanned, Stats, TotalProcessed, _Opts, NumWorkers) ->
-    TotalWork = length(Work) + TotalProcessed,
-    Self = self(),
-    {CoordPid, CoordRef} = spawn_monitor(fun() ->
-        coordinator_loop_initial(#{
-            work => Work,
-            scanned => Scanned,
-            stats => Stats,
-            total_processed => TotalProcessed,
-            total_work => TotalWork,
-            since_save => 0,
-            active_workers => NumWorkers,
-            worker_monitors => #{},
-            parent => Self
-        })
-    end),
-    receive
-        {coordinator_done, _FinalStats} -> ok;
-        {error, Reason} -> {error, Reason};
-        {'DOWN', CoordRef, process, CoordPid, Reason} -> {error, Reason}
-    end.
-
--spec coordinator_loop_initial(coordinator_state()) -> no_return().
-coordinator_loop_initial(State) ->
-    #{active_workers := NumWorkers} = State,
-    WorkerMonitors = spawn_workers(self(), NumWorkers),
-    coordinator_loop(State#{worker_monitors => WorkerMonitors}).
-
--spec spawn_workers(pid(), non_neg_integer()) -> #{reference() => pid()}.
-spawn_workers(_CoordPid, 0) ->
-    #{};
-spawn_workers(CoordPid, N) when N > 0 ->
-    {WorkerPid, MonitorRef} = spawn_monitor(fun() -> worker_loop(CoordPid) end),
-    Rest = spawn_workers(CoordPid, N - 1),
-    Rest#{MonitorRef => WorkerPid}.
-
--spec coordinator_loop(coordinator_state()) -> no_return().
-coordinator_loop(State) ->
-    receive
-        {get_work, WorkerPid} ->
-            case maps:get(work, State) of
-                [] ->
-                    WorkerPid ! no_more_work,
-                    coordinator_loop(State);
-                [Item | Rest] ->
-                    WorkerPid ! {work, Item},
-                    coordinator_loop(State#{work => Rest})
-            end;
-        {result, Key, RepoStats} ->
-            #{
-                scanned := Scanned,
-                stats := Stats,
-                total_processed := TP,
-                total_work := TW,
-                since_save := SS,
-                parent := Parent
-            } = State,
-            NewScanned = sets:add_element(Key, Scanned),
-            NewStats = merge_repo_stats(RepoStats, Stats),
-            NewTP = TP + 1,
-            NewSS = SS + 1,
-            io:format(
-                "\r  Progress: ~p/~p (~.1f%)    ",
-                [NewTP, TW, NewTP / max(1, TW) * 100]
-            ),
-            case NewSS >= ?SAVE_INTERVAL of
-                true ->
-                    case save_state(NewScanned, NewStats, NewTP) of
-                        ok ->
-                            coordinator_loop(State#{
-                                scanned => NewScanned,
-                                stats => NewStats,
-                                total_processed => NewTP,
-                                since_save => 0
-                            });
-                        {error, Reason} ->
-                            io:format(
-                                "\n  Warning: Failed to save state: ~p\n",
-                                [Reason]
-                            ),
-                            Parent ! {error, {save_state, Reason}}
-                    end;
-                false ->
-                    coordinator_loop(State#{
-                        scanned => NewScanned,
-                        stats => NewStats,
-                        total_processed => NewTP,
-                        since_save => NewSS
-                    })
-            end;
-        {worker_done, _WorkerPid} ->
-            handle_worker_exit(State, undefined);
-        {'DOWN', MonitorRef, process, WorkerPid, Reason} ->
-            case maps:get(worker_monitors, State, #{}) of
-                #{MonitorRef := _} ->
-                    handle_worker_exit(State, {MonitorRef, WorkerPid, Reason});
-                #{} ->
-                    % Unknown monitor ref - just clean up
-                    NewMonitors = maps:remove(
-                        MonitorRef, maps:get(worker_monitors, State, #{})
-                    ),
-                    coordinator_loop(State#{worker_monitors => NewMonitors})
-            end
-    end.
-
--spec handle_worker_exit(map(), 'undefined' | {reference(), pid(), term()}) ->
-    {'coordinator_done', term()} | {'error', term()}.
-handle_worker_exit(State, ExitInfo) ->
-    #{
-        active_workers := AW,
-        stats := Stats,
-        scanned := Scanned,
-        total_processed := TP,
-        parent := Parent,
-        worker_monitors := Monitors
-    } = State,
-    NewAW = AW - 1,
-    NewMonitors =
-        case ExitInfo of
-            undefined ->
-                Monitors;
-            {MonitorRef, _WorkerPid, _Reason} ->
-                maps:remove(MonitorRef, Monitors)
+-doc "Filter out already-scanned work items".
+-spec filter_scanned([work_item()], #{binary() => non_neg_integer()}) ->
+    [work_item()].
+filter_scanned(WorkItems, Scanned) ->
+    lists:filter(
+        fun({Type, Item}) ->
+            Key = work_key(Type, Item),
+            not maps:is_key(Key, Scanned)
         end,
-    case NewAW of
-        0 ->
-            io:format("\n"),
-            case save_state(Scanned, Stats, TP) of
-                ok ->
-                    Parent ! {coordinator_done, Stats};
-                {error, Reason} ->
-                    Parent ! {error, {save_state, Reason}}
-            end;
-        _ ->
-            coordinator_loop(State#{
-                active_workers => NewAW,
-                worker_monitors => NewMonitors
-            })
-    end.
-
--spec worker_loop(pid()) -> no_return().
-worker_loop(CoordPid) ->
-    CoordPid ! {get_work, self()},
-    receive
-        {work, {github, Item}} ->
-            Key = work_key(github, Item),
-            RepoStats =
-                try
-                    process_github_repo(Item)
-                catch
-                    _:Reason ->
-                        io:format("\n  Error processing ~s: ~p\n", [Key, Reason]),
-                        #{}
-                end,
-            CoordPid ! {result, Key, RepoStats},
-            worker_loop(CoordPid);
-        {work, {hex, Item}} ->
-            Key = work_key(hex, Item),
-            RepoStats =
-                try
-                    process_hex_package(Item)
-                catch
-                    _:Reason ->
-                        io:format("\n  Error processing ~s: ~p\n", [Key, Reason]),
-                        #{}
-                end,
-            CoordPid ! {result, Key, RepoStats},
-            worker_loop(CoordPid);
-        no_more_work ->
-            CoordPid ! {worker_done, self()},
-            ok
-    end.
-
--spec process_github_repo(map()) ->
-    #{{binary(), binary(), arity()} => non_neg_integer()}.
-process_github_repo(Repo) ->
-    CloneUrl = maps:get(clone_url, Repo),
-    TmpDir = spectrometer_utils:make_temp_dir("gh_"),
-    try
-        case spectrometer_http:download_github_repo(CloneUrl, TmpDir) of
-            ok ->
-                case filelib:is_dir(TmpDir) of
-                    true -> spectrometer_scanner:scan_directory(TmpDir);
-                    false -> #{}
-                end;
-            {error, _} ->
-                #{}
-        end
-    after
-        _ = spectrometer_utils:purge_dir(TmpDir)
-    end.
-
--spec process_hex_package(map()) ->
-    #{{binary(), binary(), arity()} => non_neg_integer()}.
-process_hex_package(Package) ->
-    Name = maps:get(name, Package),
-    Version = maps:get(version, Package),
-    case spectrometer_http:download_hex_tarball(Name, Version) of
-        {ok, TmpDir} ->
-            try
-                spectrometer_scanner:scan_directory(TmpDir)
-            after
-                spectrometer_utils:purge_dir(TmpDir)
-            end;
-        {error, _Reason} ->
-            #{}
-    end.
-
--doc """
-Merge a single repo's scan statistics into the global ecosystem accumulator.
-
-Each entry in `GlobalStats` tracks `{TotalCalls, RepoCount}`.
-""".
--spec merge_repo_stats(
-    #{{binary(), binary(), arity()} => non_neg_integer()},
-    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}}
-) ->
-    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}}.
-merge_repo_stats(RepoStats, GlobalStats) ->
-    maps:fold(
-        fun(Key, CallCount, Acc) ->
-            maps:update_with(
-                Key,
-                fun({TC, RC}) -> {TC + CallCount, RC + 1} end,
-                {CallCount, 1},
-                Acc
-            )
-        end,
-        GlobalStats,
-        RepoStats
+        WorkItems
     ).
 
--spec save_state(
-    sets:set(map()),
-    #{{binary(), binary(), arity()} => {non_neg_integer(), non_neg_integer()}},
-    non_neg_integer()
-) -> ok | {error, term()}.
-save_state(Scanned, Stats, TotalProcessed) ->
-    State = {spectrometer_v1, Scanned, Stats, TotalProcessed},
-    CacheDir =
-        case application:get_env(spectrometer, cache_dir) of
-            undefined -> spectrometer_utils:user_cache_path();
-            {ok, CacheDir1} -> CacheDir1
-        end,
-    TmpFile = filename:join(CacheDir, ?ECOSYSTEM_STATE ++ ".tmp"),
-    case filelib:ensure_path(CacheDir) of
-        ok ->
-            case
-                file:write_file(TmpFile, term_to_binary(State, [compressed]))
-            of
-                ok ->
-                    EcoState = filename:join(CacheDir, ?ECOSYSTEM_STATE),
-                    case file:rename(TmpFile, EcoState) of
-                        ok -> ok;
-                        {error, Reason} -> {error, {rename, Reason}}
-                    end;
-                {error, Reason} ->
-                    {error, {write, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {ensure_path, Reason}}
-    end.
+-doc false.
+-spec fetch_more(
+    [map()],
+    [map()],
+    #{binary() => non_neg_integer()},
+    integer() | infinity,
+    integer() | infinity,
+    boolean(),
+    boolean(),
+    boolean(),
+    boolean()
+) ->
+    {[map()], [map()]}.
+fetch_more(
+    Repos,
+    Packages,
+    _Scanned,
+    _Limit,
+    _Stars,
+    _GithubEnabled,
+    _HexEnabled,
+    _GithubFetched,
+    _HexFetched
+) ->
+    {Repos, Packages}.
 
+-doc "Generate a unique string key for a work item".
+-spec work_key(github | hex, map()) -> binary().
+work_key(github, #{full_name := Name}) ->
+    list_to_binary("github:" ++ Name);
+work_key(hex, #{name := Name}) ->
+    list_to_binary("hex:" ++ Name).
+
+-doc """
+Returns the canonical package name for a work item.
+
+For GitHub items, this is `basename(full_name)` (e.g. `<<">>` from
+`<<">>`). For Hex items, this is the package name as-is.
+The canonical name is used as the key in `PackageNames` / `PackageMap`.
+""".
+-spec canonical_package_name(github | hex, map()) -> binary().
+canonical_package_name(github, #{full_name := FullName}) ->
+    list_to_binary(filename:basename(FullName));
+canonical_package_name(hex, #{name := Name}) ->
+    spectrometer_utils:ensure_binary(Name).
+
+-doc """
+Returns the canonical package key for a work item.
+
+This is the value used as key in `PackageNames` / `PackageMap`.
+Delegates to `canonical_package_name/2`.
+""".
+-spec package_key(github | hex, map()) -> binary().
+package_key(Type, Item) ->
+    canonical_package_name(Type, Item).
+
+-doc "Generate a random cookie for this ecosystem run".
+-spec generate_cookie() -> atom().
+generate_cookie() ->
+    Cookie = list_to_atom(
+        "spec_" ++ integer_to_list(erlang:unique_integer([positive]))
+    ),
+    application:set_env(spectrometer, ecosystem_cookie, Cookie),
+    Cookie.
+
+-type eco_stats_value() :: #{
+    calls => non_neg_integer(),
+    repo_count => non_neg_integer(),
+    callers => ordsets:ordset(non_neg_integer())
+}.
+-type mod_name() :: binary().
+-type fun_name() :: binary().
+-type eco_stats() :: #{{mod_name(), fun_name(), arity()} => eco_stats_value()}.
+-type eco_scanned() :: #{binary() => non_neg_integer()}.
+-type eco_package_map() :: #{non_neg_integer() => binary()}.
+
+%% @doc Load ecosystem state from disk (v3 format).
+%% Returns {ScannedMap, Stats, PackageMap, TotalProcessed}.
+%% On invalid or old format, starts fresh.
 -spec load_state() ->
-    {
-        sets:set(map()),
-        #{
-            {binary(), binary(), arity()} => {
-                non_neg_integer(), non_neg_integer()
-            }
-        },
-        non_neg_integer()
-    }.
+    {eco_scanned(), eco_stats(), eco_package_map(), non_neg_integer()}.
 load_state() ->
-    case
-        file:read_file(
-            filename:join(
-                spectrometer_utils:user_cache_path(), ?ECOSYSTEM_STATE
-            )
-        )
-    of
+    CacheDir = spectrometer_utils:user_cache_path(),
+    StateFile = filename:join(CacheDir, ?ECOSYSTEM_STATE),
+    case file:read_file(StateFile) of
         {ok, Bin} ->
             try
                 case binary_to_term(Bin) of
-                    {spectrometer_v1, Scanned, Stats, TotalProcessed} ->
-                        io:format(
-                            "Resumed state: ~p items already scanned\n", [
-                                TotalProcessed
-                            ]
-                        ),
-                        {Scanned, Stats, TotalProcessed};
+                    {spectrometer_v1, Scanned, Stats, PackageMap,
+                        TotalProcessed} when
+                        is_map(Scanned),
+                        is_map(Stats),
+                        is_map(PackageMap)
+                    ->
+                        case package_map_valid(PackageMap) of
+                            true ->
+                                ?LOG_INFO(
+                                    "Resumed state: ~p items already scanned",
+                                    [TotalProcessed]
+                                ),
+                                {Scanned, Stats, PackageMap, TotalProcessed};
+                            false ->
+                                ?LOG_WARNING(
+                                    "Warning: Incompatible state file (old format), "
+                                    "renaming and starting fresh"
+                                ),
+                                _ = backup_state_file(),
+                                {#{}, #{}, #{}, 0}
+                        end;
                     _ ->
-                        io:format(
-                            "Warning: Invalid state file, starting fresh\n"
+                        ?LOG_WARNING(
+                            "Warning: Invalid state file, renaming and starting fresh"
                         ),
-                        {sets:new([{version, 2}]), #{}, 0}
+                        {#{}, #{}, #{}, 0}
                 end
             catch
                 _:_ ->
-                    io:format(
-                        "Warning: Could not decode state file, starting fresh\n"
+                    ?LOG_WARNING(
+                        "Warning: Could not decode state file, starting fresh"
                     ),
-                    {sets:new([{version, 2}]), #{}, 0}
+                    {#{}, #{}, #{}, 0}
             end;
         {error, enoent} ->
-            io:format("No state file found, starting fresh\n"),
-            {sets:new([{version, 2}]), #{}, 0};
+            ?LOG_INFO("No state file found, starting fresh"),
+            {#{}, #{}, #{}, 0};
         {error, Reason} ->
-            io:format(
-                "Warning: Could not read state file (~p), starting fresh\n",
+            ?LOG_WARNING(
+                "Warning: Could not read state file (~p), starting fresh",
                 [Reason]
             ),
-            {sets:new([{version, 2}]), #{}, 0}
+            {#{}, #{}, #{}, 0}
     end.
