@@ -150,13 +150,13 @@ main(GlobalArgs) ->
 
 -doc false.
 -ifdef(TEST).
--spec maybe_halt(non_neg_integer()) -> ok | {error, {halt, non_neg_integer()}}.
+-spec maybe_halt(integer()) -> ok | {error, {halt, integer()}}.
 maybe_halt(0) ->
     ok;
 maybe_halt(Code) ->
     {error, {halt, Code}}.
 -else.
--spec maybe_halt(non_neg_integer()) -> no_return().
+-spec maybe_halt(integer()) -> no_return().
 maybe_halt(Code) ->
     halt(Code).
 -endif.
@@ -423,7 +423,8 @@ default_eco_opts() ->
         github => true,
         hex => true,
         limit => infinity,
-        resume => false
+        resume => false,
+        slow => false
     }.
 
 -spec parse_ecosystem_args([string()], opts_map()) -> parse_arg_result().
@@ -456,6 +457,8 @@ parse_ecosystem_args(["--stars", N | Rest], Opts) ->
     end;
 parse_ecosystem_args(["--resume" | Rest], Opts) ->
     parse_ecosystem_args(Rest, Opts#{resume => true});
+parse_ecosystem_args(["--slow" | Rest], Opts) ->
+    parse_ecosystem_args(Rest, Opts#{slow => true});
 parse_ecosystem_args(["--cache-dir", Dir | Rest], Opts) ->
     parse_ecosystem_args(Rest, Opts#{cache_dir => Dir});
 parse_ecosystem_args([Unknown | _], _Opts) ->

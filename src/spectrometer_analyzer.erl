@@ -76,7 +76,7 @@ https://github.com/owner/repo, or https://github.com/owner/repo.git etc...
 Creates temporary directories for clones/downloads and cleans them up
 after scanning.
 """.
--spec audit(Opts :: map()) -> ok | {error, Reason :: term()}.
+-spec audit(Opts :: map()) -> non_neg_integer() | {error, Reason :: term()}.
 audit(Opts) ->
     analyze(Opts, true).
 
@@ -123,7 +123,7 @@ When called from `examine/1` the function returns `ok` or `{error, term()}` When
 fails.
 """.
 -spec analyze(Opts :: map(), AvmAudit :: boolean()) ->
-    ok | {error, Reason :: term()}.
+    ok | non_neg_integer() | {error, Reason :: term()}.
 analyze(Opts, AvmAudit) ->
     try
         case Opts of
@@ -143,7 +143,7 @@ analyze(Opts, AvmAudit) ->
             end,
 
         ?LOG_INFO("Analyzing ~p unique function calls", [
-            maps:size(Stats)
+            maps:get(total_unique, Stats, 0)
         ]),
 
         Report = spectrometer_reporter:generate_report(
@@ -162,14 +162,21 @@ analyze(Opts, AvmAudit) ->
                 true ->
                     length(maps:get(unsupported, Report, []));
                 false ->
-                    ?LOG_ERROR("No function calls detected. No erlang sources were found in the target."),
+                    ?LOG_ERROR(
+                        "No function calls detected. No erlang sources were found in the target."
+                    ),
                     error(no_fun)
             end,
         case Opts of
             #{output := OutputFile} when is_list(OutputFile) ->
                 case spectrometer_reporter:write_csv(OutputFile, Report) of
                     ok ->
-                        ok;
+                        case AvmAudit of
+                            false ->
+                                ok;
+                            true ->
+                                Unsupported
+                        end;
                     {error, Reason1} ->
                         ?LOG_ERROR(
                             "Failed to write CSV report to ~s: ~p",
@@ -178,7 +185,12 @@ analyze(Opts, AvmAudit) ->
                         error(Reason1)
                 end;
             #{} ->
-                ok
+                case AvmAudit of
+                    false ->
+                        ok;
+                    true ->
+                        Unsupported
+                end
         end
     catch
         error:Reason -> {error, Reason}
@@ -343,51 +355,6 @@ merge_stats(New, Acc) ->
         New
     ).
 
--spec load_ecosystem_state() ->
-    #{
-        {binary(), binary(), arity()} => #{
-            calls => non_neg_integer(),
-            repo_count => non_neg_integer(),
-            callers => ordsets:ordset(non_neg_integer())
-        }
-    }.
-load_ecosystem_state() ->
-    CacheDir = spectrometer_utils:user_cache_path(),
-    StateFile = filename:join(CacheDir, ?ECOSYSTEM_STATE),
-    case file:read_file(StateFile) of
-        {ok, Bin} ->
-            try
-                case binary_to_term(Bin) of
-                    {spectrometer_v1, _Scanned, Stats, _PackageMap,
-                        _TotalProcessed} when
-                        is_map(Stats)
-                    ->
-                        ?LOG_DEBUG("Loaded ecosystem state from ~s", [
-                            StateFile
-                        ]),
-                        Stats;
-                    _ ->
-                        ?LOG_WARNING(
-                            "Warning: Invalid ecosystem state file: ~s, starting with empty data set.",
-                            [StateFile]
-                        ),
-                        #{}
-                end
-            catch
-                _:_:_ ->
-                    ?LOG_WARNING(
-                        "Warning: Unable to load data from ~s, starting with empty data set.",
-                        [StateFile]
-                    ),
-                    #{}
-            end;
-        {error, enoent} ->
-            #{};
-        {error, Reason} ->
-            ?LOG_ERROR("Error: Could not read ~s: ~p~n", [StateFile, Reason]),
-            #{}
-    end.
-
 -doc """
 Execute the filter command to analyze ecosystem scan results.
 
@@ -460,8 +427,9 @@ load_filter_data(Opts) ->
                             file:format_error(Reason)}
             end;
         error ->
-            case load_ecosystem_state() of
-                Stats when map_size(Stats) > 0 ->
+            case spectrometer_ecosystem:load_state() of
+                {_Scanned, Stats, _PackageMap, _TotalProcessed,
+                    _PagesConsumed} when map_size(Stats) > 0 ->
                     maps:fold(
                         fun(
                             {ModBin, FunBin, Arity},
@@ -482,7 +450,7 @@ load_filter_data(Opts) ->
                         [],
                         Stats
                     );
-                #{} ->
+                _ ->
                     {error,
                         "Ecosystem state file found but no function calls were detected. This may happen if scanned repositories have parse errors or missing dependencies."}
             end

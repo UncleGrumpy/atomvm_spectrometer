@@ -2,7 +2,7 @@
 %% Copyright 2026 Paul Guyot <pguyot@kallisys.net>
 %% GitHub Gist @pguyot/beam_stats.escript
 %% https://gist.github.com/pguyot/da327972f1ecdb7041c97addd4e76bb5
-%% 
+%%
 %% worker node implementation for atomvm_spectrometer:
 %% Copyright (c) 2026 Winford (UncleGrumpy) <winford@object.stream>
 %%
@@ -224,6 +224,31 @@ process_item(github, Item) ->
 process_item(hex, Item) ->
     process_hex_package_binary(Item).
 
+-spec make_worker_temp_dir(string()) -> string().
+make_worker_temp_dir(Prefix) ->
+    NodePart = safe_node_name(node()),
+    spectrometer_utils:make_temp_dir(Prefix ++ NodePart ++ "_").
+
+-spec safe_node_name(node()) -> string().
+safe_node_name(Node) ->
+    [safe_filename_char(Char) || Char <- atom_to_list(Node)].
+
+-spec safe_filename_char(char()) -> char().
+safe_filename_char(Char) when
+    Char >= $a,
+    Char =< $z;
+    Char >= $A,
+    Char =< $Z;
+    Char >= $0,
+    Char =< $9;
+    Char =:= $_;
+    Char =:= $.;
+    Char =:= $-
+->
+    Char;
+safe_filename_char(_Char) ->
+    $_.
+
 %% Skip erlang/OTP and atomvm/AtomVM to avoid skewing results.
 process_github_repo_binary(#{full_name := "erlang/OTP"}) ->
     #{};
@@ -232,7 +257,7 @@ process_github_repo_binary(#{full_name := "atomvm/AtomVM"}) ->
 process_github_repo_binary(Repo) ->
     CloneUrl = maps:get(clone_url, Repo),
     ?LOG_DEBUG("Worker ~p cloning ~p", [node(), CloneUrl]),
-    TmpDir = spectrometer_utils:make_temp_dir("gh_"),
+    TmpDir = make_worker_temp_dir("gh_"),
     try
         case spectrometer_http:download_github_repo(CloneUrl, TmpDir) of
             ok ->

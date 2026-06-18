@@ -127,7 +127,7 @@ parse_file_test_() ->
 
 parse_file_nonexistent_test_() ->
     {"returns error for non-existent file", fun() ->
-        Result = spectrometer_scanner:parse_file("/nonexistent/file.erl"),
+        Result = spectrometer_scanner:parse_file("file.erl", ["/nonexistent/"]),
         ?assertMatch({error, _}, Result)
     end}.
 

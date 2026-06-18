@@ -26,7 +26,6 @@ Binary keys prevent atom table exhaustion when scanning large ecosystems.
 -export([
     scan_directory/1, scan_directory/2,
     parse_calls/1,
-    parse_file/1, parse_file/2,
     find_erl_files/1
 ]).
 
@@ -122,14 +121,12 @@ find_erl_files(Dir, Acc) ->
             Acc
     end.
 
--doc false.
-%% Parse a single .erl file in the given paths using epp_dodger for robust parsing.
-%% Returns {ok, Calls} where Calls is a map of {ModBin,FunBin,Arity} => Count,
-%% or {error, Reason} on failure.
--spec parse_file(string()) -> {ok, map()} | {error, term()}.
-parse_file(File) ->
-    parse_file(File, []).
+-doc """
+Parse a single .erl file in the given paths using epp_dodger for robust parsing.
 
+Returns {ok, Calls} where Calls is a map of #{{ModBin,FunBin,Arity} => Count},
+or {error, Reason} on failure.
+""".
 -spec parse_file(string(), [string()]) -> {ok, map()} | {error, term()}.
 parse_file(File, IncludePaths) ->
     ?LOG_DEBUG("Scanner: parse_file called for ~p with include paths ~p", [

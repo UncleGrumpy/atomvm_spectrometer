@@ -2,7 +2,7 @@
 %% Copyright 2026 Paul Guyot <pguyot@kallisys.net>
 %% GitHub Gist @pguyot/beam_stats.escript
 %% https://gist.github.com/pguyot/da327972f1ecdb7041c97addd4e76bb5
-%% 
+%%
 %% Adapted for atomvm_spectrometer:
 %% Copyright (c) 2026 Winford (UncleGrumpy) <winford@object.stream>
 %%
@@ -27,8 +27,8 @@ by star count. Hex packages are fetched via the Hex API sorted by total download
 """.
 
 -export([
-    fetch_github_repos/1,
-    fetch_hex_packages/1,
+    fetch_github_repos/2,
+    fetch_hex_packages/2,
     fetch/1,
     download_github_repo/2,
     download_hex_tarball/2
@@ -42,14 +42,9 @@ by star count. Hex packages are fetched via the Hex API sorted by total download
 -doc """
 Fetch GitHub repos via the GitHub Search API with page-based pagination.
 
-Fetches Erlang repositories sorted by star count, up to `Limit` repos.
-Pass `infinity` to fetch all available repos (capped at the API's
-pagination limits).
+Fetches Erlang repositories sorted by star count, from the given start page
+up to `Limit` repos. Pass `infinity` to fetch all available repos.
 """.
-fetch_github_repos({Limit, MinStars}) ->
-    fetch_github_repos({Limit, MinStars}, 1).
-
--doc false.
 fetch_github_repos({Limit, MinStars}, StartPage) ->
     ?LOG_INFO("Fetching GitHub repos"),
     Max =
@@ -74,7 +69,7 @@ fetch_github_repos({Limit, MinStars}, StartPage) ->
 %% Page-based GitHub repo fetching with a stable star range.
 -spec fetch_github_page(
     integer() | infinity, pos_integer(), [map()], integer()
-) -> {[map()], integer() | undefined}.
+) -> {[map()] | [], integer() | undefined}.
 fetch_github_page(MinStars, Page, Acc, Max) ->
     fetch_github_page_range(MinStars, undefined, Page, Acc, Max, "desc").
 
@@ -114,7 +109,7 @@ fetch_github_repos_below_cap(_MinStars, Acc, _BoundaryStars, _Max) ->
     [map()],
     integer(),
     string()
-) -> {[map()], integer() | undefined}.
+) -> {[map()] | [], integer() | undefined}.
 fetch_github_page_range(MinStars, MaxStars, Page, Acc, Max, SortOrder) ->
     fetch_github_page_range(
         MinStars, MaxStars, Page, Acc, Max, SortOrder, undefined
@@ -128,7 +123,7 @@ fetch_github_page_range(MinStars, MaxStars, Page, Acc, Max, SortOrder) ->
     integer(),
     string(),
     integer() | undefined
-) -> {[map()], integer() | undefined}.
+) -> {[map()] | [], integer() | undefined}.
 fetch_github_page_range(
     _MinStars, _MaxStars, _Page, Acc, Max, _SortOrder, BoundaryStars
 ) when
@@ -186,14 +181,9 @@ star_filter_range(MinStars, undefined) ->
 star_filter_range(MinStars, MaxStars) ->
     io_lib:format("~p..~p", [MinStars, MaxStars]).
 
--dialyzer({nowarn_function, [boundary_from_raw_page/3]}).
-%% The [] clause is a defensive fallback; Dialyzer's success typing
-%% for fetch_github_page/3 infers a non-empty list, making this
-%% clause unreachable per static analysis. The clause is kept for
-%% runtime safety in case the API behavior changes.
 -spec boundary_from_raw_page(pos_integer(), [map()], integer() | undefined) ->
     integer() | undefined.
-boundary_from_raw_page(_Page, [], BoundaryStars) ->
+boundary_from_raw_page(_Page, [#{}], BoundaryStars) ->
     BoundaryStars;
 boundary_from_raw_page(_Page, RawPage, _BoundaryStars) ->
     Stars = [maps:get(stars, Repo) || Repo <- RawPage],
@@ -263,11 +253,15 @@ fetch_github_page(StarRange, Page, SortOrder) ->
 -doc """
 Fetch Hex packages via the Hex API sorted by total downloads.
 
-Fetches Erlang packages up to `Limit`. Pass `infinity` to fetch all
-available packages (capped at API pagination limits).
+Fetches Erlang packages up to `Limit`, pass `infinity` to fetch all
+available packages (capped at API pagination limits), starting from 
+`StartPage`. Returns a list of package maps with `name`, `version`, and
+`github_url` keys.
 """.
--spec fetch_hex_packages(integer() | infinity) -> [map()].
-fetch_hex_packages(Limit) ->
+-spec fetch_hex_packages(
+    Limit :: non_neg_integer() | infinity, StartPage :: non_neg_integer()
+) -> [map()].
+fetch_hex_packages(Limit, StartPage) ->
     Max =
         case Limit of
             infinity -> ?HEX_MAX_PAGES * ?HEX_PER_PAGE;

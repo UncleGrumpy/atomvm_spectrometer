@@ -50,7 +50,6 @@ ensure_binary(T) ->
     ),
     <<>>.
 
-
 -doc """
 Return the path to the bundled human-readable data file.
 

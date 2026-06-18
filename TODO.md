@@ -30,11 +30,6 @@ bare call like length(X) to resolve to the local function instead of the BIF,
 but the code will still count it as an OTP call, misclassifying user-defined
 functions and skewing scan results.
 
-### `supported` modules
-
-The `supported` command should print a list of all AtomVM modules if the `-m`
-or `--module` option is given without a module name.
-
 ### Add support for adding (and reporting) downstream drivers and libraries
 
 The `update` command should have an option for adding downstream drivers or
@@ -47,20 +42,6 @@ supported functions as bare atoms, and downstream libraries as
 `{Library, Module}`. The downstream option should take optional platform and
 AtomVM version parameters, defaulting to `all` platforms and unknown for the
 AtomVM release.
-
-## Would be nice
-
-### Use logger with configurable levels
-
-Logger should be used instead of `io:format/2` for log messages. A configurable
-log file should be used, defaulting to a log file in the users cache directory
-that is overwritten on each run. The log level should be configurable, as well
-as the option for changing the log file name and location.
-
-#### Refactor error handling and logging
-
-Errors should be refactored to return atom() "reasons", and the conversion to
-log messages should be handled by dispatch to an error logger.
 
 ### Reusable APIs
 

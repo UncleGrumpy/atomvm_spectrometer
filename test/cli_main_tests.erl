@@ -112,7 +112,8 @@ main_help_query_test_() ->
 main_help_unknown_test_() ->
     {"main(['help', 'unknown']) returns error", fun() ->
         ?assertMatch(
-            {error, {halt, 1}}, atomvm_spectrometer:main(["help", "unknown"])
+            {error, {halt, 1}},
+            atomvm_spectrometer:main(["--log", "emergency", "help", "unknown"])
         )
     end}.
 
@@ -130,7 +131,7 @@ main_unknown_command_test_() ->
     {"main(['unknown_command']) returns error tuple", fun() ->
         ?assertMatch(
             {error, {halt, 1}},
-            atomvm_spectrometer:main(["unknown_command"])
+            atomvm_spectrometer:main(["--log", "emergency", "unknown_command"])
         )
     end}.
 
@@ -146,22 +147,34 @@ main_supported_all_test_() ->
 main_supported_module_lists_test_() ->
     {"main(['supported', '--module', 'lists']) returns ok", fun() ->
         ?assertEqual(
-            ok, atomvm_spectrometer:main(["supported", "--module", "lists"])
+            ok,
+            atomvm_spectrometer:main([
+                "--log", "emergency", "supported", "--module", "lists"
+            ])
         )
     end}.
 
 main_supported_module_maps_test_() ->
     {"main(['supported', '-m', 'maps']) returns ok", fun() ->
-        ?assertEqual(ok, atomvm_spectrometer:main(["supported", "-m", "maps"]))
+        ?assertEqual(
+            ok,
+            atomvm_spectrometer:main([
+                "--log", "emergency", "supported", "-m", "maps"
+            ])
+        )
     end}.
 
 main_supported_module_nonexistent_test_() ->
-    {"main(['supported', '--module', 'nonexistent_xyz']) returns ok with stderr error",
+    {"main(['supported', '--module', 'nonexistent_xyz']) returns error with stderr error",
         fun() ->
             ?assertEqual(
                 {error, {halt, 1}},
                 atomvm_spectrometer:main([
-                    "supported", "--module", "nonexistent_module_xyz"
+                    "--log",
+                    "emergency",
+                    "supported",
+                    "--module",
+                    "nonexistent_module_xyz"
                 ])
             )
         end}.
@@ -202,7 +215,9 @@ main_query_invalid_format_test_() ->
         fun() ->
             ?assertMatch(
                 {error, {halt, 1}},
-                atomvm_spectrometer:main(["query", "invalid_format"])
+                atomvm_spectrometer:main([
+                    "--log", "emergency", "query", "invalid_format"
+                ])
             )
         end}.
 
@@ -210,7 +225,9 @@ main_query_invalid_arity_test_() ->
     {"main(['query', 'lists:map/abc']) returns error", fun() ->
         ?assertMatch(
             {error, {halt, 1}},
-            atomvm_spectrometer:main(["query", "lists:map/abc"])
+            atomvm_spectrometer:main([
+                "--log", "emergency", "query", "lists:map/abc"
+            ])
         )
     end}.
 
@@ -218,7 +235,9 @@ main_query_module_nofun_test_() ->
     {"main(['query', 'nonexistent_mod']) returns error", fun() ->
         ?assertMatch(
             {error, {halt, 1}},
-            atomvm_spectrometer:main(["query", "nonexistent_mod"])
+            atomvm_spectrometer:main([
+                "--log", "emergency", "query", "nonexistent_mod"
+            ])
         )
     end}.
 
@@ -337,7 +356,10 @@ main_audit_missing_dir_test_() ->
 
 main_audit_no_target_test_() ->
     {"main(['audit']) returns error for missing target", fun() ->
-        ?assertMatch({error, {halt, 1}}, atomvm_spectrometer:main(["audit"]))
+        ?assertMatch(
+            {error, {halt, 1}},
+            atomvm_spectrometer:main(["--log", "emergency", "audit"])
+        )
     end}.
 
 main_audit_unknown_option_test_() ->
@@ -345,7 +367,12 @@ main_audit_unknown_option_test_() ->
         ?assertMatch(
             {error, {halt, 1}},
             atomvm_spectrometer:main([
-                "audit", "--github", "https://github.com/user/repo", "--unknown"
+                "--log",
+                "emergency",
+                "audit",
+                "--github",
+                "https://github.com/user/repo",
+                "--unknown"
             ])
         )
     end}.
@@ -371,7 +398,7 @@ main_filter_no_csv_test_() ->
             fun({_TempDir, MissingCache}) ->
                 ?_test(begin
                     Result = atomvm_spectrometer:main([
-                        "filter", "-c", MissingCache
+                        "--log", "emergency", "filter", "-c", MissingCache
                     ]),
                     ?assertEqual({error, {halt, 1}}, Result)
                 end)
@@ -406,7 +433,7 @@ main_filter_no_user_state_test_() ->
                 ?_test(begin
                     application:set_env(spectrometer, cache_dir, CacheDir),
                     Result = atomvm_spectrometer:main([
-                        "filter", "--min-repos", "10"
+                        "--log", "emergency", "filter", "--min-repos", "10"
                     ]),
                     ?assertEqual({error, {halt, 1}}, Result),
                     case Prev of
@@ -432,7 +459,7 @@ main_filter_min_repos_test_() ->
                     application:set_env(spectrometer, cache_dir, CacheDir),
                     try
                         ok = atomvm_spectrometer:main([
-                            "ecosystem", "--limit", "5"
+                            "--log", "emergency", "ecosystem", "--limit", "5"
                         ]),
                         Result = atomvm_spectrometer:main([
                             "filter", "--min-repos", "1", "--cache", CacheDir
@@ -458,7 +485,9 @@ main_filter_invalid_min_repos_test_() ->
     {"main(['filter', '--min-repos', 'abc']) returns error", fun() ->
         ?assertMatch(
             {error, {halt, 1}},
-            atomvm_spectrometer:main(["filter", "--min-repos", "abc"])
+            atomvm_spectrometer:main([
+                "--log", "emergency", "filter", "--min-repos", "abc"
+            ])
         )
     end}.
 
@@ -554,7 +583,7 @@ main_supported_mock_module_test_() ->
 %% 8. audit --github (network test)
 %% =============================================================================
 
-main_audit_github_small_repo_test_() ->
+main_audit_github_supported_repo_test_() ->
     case os:getenv("SKIP_NETWORK_TESTS") of
         false ->
             {"main(['audit', '--github', 'https://github.com/atomvm/atomvm_lora']) audits fully supported repo",
@@ -693,6 +722,8 @@ main_update_no_force_overwrite_test_() ->
                             ),
                             ok = file:write_file(OutputFile, "dummy"),
                             Result = atomvm_spectrometer:main([
+                                "--log",
+                                "emergency",
                                 "update",
                                 "--atomvm-dir",
                                 AtomVMDir,
@@ -824,6 +855,43 @@ filter_avm_test_() ->
         ]}
     }.
 
+filter_binary_state_test_() ->
+    {
+        setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir("filter_bin_"),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(Dir) ->
+                ?_test(begin
+                    CacheDir = filename:join(Dir, "cache"),
+                    ok = filelib:ensure_path(CacheDir),
+                    State =
+                        {spectrometer_v0_r2, #{},
+                            #{
+                                {lists, map, 2} => #{
+                                    calls => 100,
+                                    repo_count => 5,
+                                    callers => ordsets:from_list([1])
+                                }
+                            },
+                            #{1 => <<"mylib">>}, 1, #{github => 1, hex => 1}},
+                    StateFile = filename:join(CacheDir, "beam_ecosystem.bin"),
+                    ok = file:write_file(
+                        StateFile, term_to_binary(State, [compressed])
+                    ),
+                    Result = atomvm_spectrometer:main([
+                        "filter", "--cache-dir", CacheDir
+                    ]),
+                    ?assertEqual(ok, Result)
+                end)
+            end
+        ]}
+    }.
+
 %% =============================================================================
 %% Update command tests
 %% =============================================================================
@@ -869,6 +937,8 @@ update_force_existing_db_test_() ->
                         OutputFile, io_lib:format("~p.\n", [ExistingDB])
                     ),
                     Result = atomvm_spectrometer:main([
+                        "--log",
+                        "emergency",
                         "update",
                         "--atomvm-dir",
                         AtomVMDir,

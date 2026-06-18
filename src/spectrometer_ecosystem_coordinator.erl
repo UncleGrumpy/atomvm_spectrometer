@@ -2,7 +2,7 @@
 %% Copyright 2026 Paul Guyot <pguyot@kallisys.net>
 %% GitHub Gist @pguyot/beam_stats.escript
 %% https://gist.github.com/pguyot/da327972f1ecdb7041c97addd4e76bb5
-%% 
+%%
 %% gen_server and worker node implementation for atomvm_spectrometer:
 %% Copyright (c) 2026 Winford (UncleGrumpy) <winford@object.stream>
 %%
@@ -20,7 +20,11 @@
 
 -ignore_xref(start_link/0).
 
--export([start_link/0, start_work/7, worker_down/1]).
+-export([
+    start_link/0,
+    start_work/8,
+    worker_down/1
+]).
 -export([
     init/1,
     handle_call/3,
@@ -49,10 +53,12 @@
     next_package_id :: non_neg_integer(),
     total_processed :: non_neg_integer(),
     total_work :: non_neg_integer(),
+    unique_work :: non_neg_integer(),
     since_save :: non_neg_integer(),
     pending_work :: #{reference() => {node(), binary(), {github | hex, map()}}},
     ready_workers :: sets:set(node()),
-    parent :: pid()
+    parent :: pid(),
+    pages_consumed :: #{github => pos_integer(), hex => pos_integer()}
 }).
 
 %% @doc Start the coordinator gen_server.
@@ -60,7 +66,9 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% @doc Initialize work in the coordinator. Called once after start_link.
+-doc """
+Initialize work in the coordinator. Called once after start_link.
+""".
 -spec start_work(
     [{github | hex, map()}],
     #{binary() => non_neg_integer()},
@@ -73,13 +81,24 @@ start_link() ->
     },
     #{non_neg_integer() => binary()},
     non_neg_integer(),
+    #{github => pos_integer(), hex => pos_integer()},
     atomvm_spectrometer:opts_map(),
     pid()
 ) -> ok.
-start_work(Work, Scanned, Stats, PackageMap, TotalProcessed, _Opts, Parent) ->
+start_work(
+    Work,
+    Scanned,
+    Stats,
+    PackageMap,
+    TotalProcessed,
+    PagesConsumed,
+    _Opts,
+    Parent
+) ->
     gen_server:cast(
         ?MODULE,
-        {start_work, Work, Scanned, Stats, PackageMap, TotalProcessed, Parent}
+        {start_work, Work, Scanned, Stats, PackageMap, TotalProcessed,
+            PagesConsumed, Parent}
     ).
 
 %% @doc Notify the coordinator that a worker node went down.
@@ -99,20 +118,24 @@ init([]) ->
         next_package_id = 1,
         total_processed = 0,
         total_work = 0,
+        unique_work = 0,
         since_save = 0,
         pending_work = #{},
         ready_workers = sets:new([{version, 2}]),
-        parent = self()
+        parent = self(),
+        pages_consumed = #{}
     }}.
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
 handle_cast(
-    {start_work, Work, Scanned, Stats, PackageMap, TotalProcessed, Parent},
+    {start_work, Work, Scanned, Stats, PackageMap, TotalProcessed,
+        PagesConsumed, Parent},
     State
 ) ->
     TotalWork = length(Work) + TotalProcessed,
+    UniqueWork = length(Work) + State#coord_state.unique_work,
     PackageNames = maps:from_list(
         [{Name, ID} || {ID, Name} <- maps:to_list(PackageMap)]
     ),
@@ -125,12 +148,18 @@ handle_cast(
         next_package_id = maps:size(PackageMap) + 1,
         total_processed = TotalProcessed,
         total_work = TotalWork,
+        unique_work = UniqueWork,
         since_save = 0,
         pending_work = #{},
-        parent = Parent
+        parent = Parent,
+        pages_consumed = PagesConsumed
     },
     %% Dispatch work to any workers that have already signaled ready
-    {noreply, dispatch_ready(NewState)};
+    {Action, NewState1} = dispatch_ready(NewState),
+    case Action of
+        continue -> {noreply, NewState1};
+        stop -> {stop, normal, NewState1}
+    end;
 handle_cast(
     {worker_ready, WorkerNode},
     State = #coord_state{ready_workers = Ready}
@@ -139,7 +168,11 @@ handle_cast(
     NewReady = sets:add_element(WorkerNode, Ready),
     NewState = State#coord_state{ready_workers = NewReady},
     %% If we have work, dispatch immediately
-    {noreply, dispatch_ready(NewState)};
+    {Action, NewState1} = dispatch_ready(NewState),
+    case Action of
+        continue -> {noreply, NewState1};
+        stop -> {stop, normal, NewState1}
+    end;
 handle_cast(
     {worker_down, Node},
     State = #coord_state{
@@ -186,12 +219,12 @@ handle_cast(
                 ]
             ),
             {noreply, State};
-        {ok, {WorkerNode, PackageKey, Item}} ->
+        {ok, {WorkerNode, WorkKey, Item}} ->
             NewPending = maps:remove(Ref, Pending),
             {Action, NewState} = handle_worker_result(
                 WorkerNode,
                 Item,
-                PackageKey,
+                WorkKey,
                 RepoStats,
                 Work,
                 NewPending,
@@ -200,9 +233,13 @@ handle_cast(
             ),
             case Action of
                 continue ->
-                    {noreply, dispatch_ready(NewState)};
+                    {Action1, NewState1} = dispatch_ready(NewState),
+                    case Action1 of
+                        continue -> {noreply, NewState1};
+                        stop -> {stop, normal, NewState1}
+                    end;
                 stop ->
-                    {stop, normal, dispatch_ready(NewState)}
+                    {stop, normal, NewState}
             end
     end;
 handle_cast(
@@ -215,7 +252,11 @@ handle_cast(
     NewState = State#coord_state{ready_workers = NewReady},
     %% Spawn replacement
     spawn_replacement(),
-    {noreply, dispatch_ready(NewState)};
+    {Action, NewState1} = dispatch_ready(NewState),
+    case Action of
+        continue -> {noreply, NewState1};
+        stop -> {stop, normal, NewState1}
+    end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -251,9 +292,10 @@ terminate(_Reason, #coord_state{
     stats = Stats,
     scanned = Scanned,
     package_map = PackageMap,
-    total_processed = TP
+    total_processed = TP,
+    pages_consumed = PagesConsumed
 }) ->
-    case save_state(Scanned, Stats, PackageMap, TP) of
+    case save_state(Scanned, Stats, PackageMap, TP, PagesConsumed) of
         ok -> ok;
         {error, R} -> ?LOG_ERROR("Failed to save state on terminate: ~p", [R])
     end,
@@ -264,12 +306,31 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% Internal functions
 
-%% @doc Dispatch work to ready workers using gen_server:cast (async).
-%% Each cast returns immediately; results arrive via handle_cast.
--spec dispatch_ready(#coord_state{}) -> #coord_state{}.
-dispatch_ready(State = #coord_state{work = []}) ->
+-doc """
+Dispatch work to ready workers, skipping duplicates and already-scanned items.
+
+Each work item is classified before dispatch:
+- Already scanned items are skipped.
+- Duplicate canonical package names are recorded without worker dispatch.
+- New unique items are sent to available workers via gen_server:cast.
+""".
+-spec dispatch_ready(#coord_state{}) -> {continue | stop, #coord_state{}}.
+dispatch_ready(State) ->
+    State1 = dispatch_ready_workers(State),
+    case
+        State1#coord_state.work =:= [] andalso
+            State1#coord_state.pending_work =:= #{}
+    of
+        true ->
+            complete(State1);
+        false ->
+            {continue, State1}
+    end.
+
+-spec dispatch_ready_workers(#coord_state{}) -> #coord_state{}.
+dispatch_ready_workers(State = #coord_state{work = []}) ->
     State;
-dispatch_ready(
+dispatch_ready_workers(
     State = #coord_state{ready_workers = Ready, pending_work = Pending}
 ) ->
     case sets:size(Ready) of
@@ -287,11 +348,12 @@ complete(
         scanned = Scanned,
         package_map = PackageMap,
         total_processed = TP,
+        pages_consumed = PagesConsumed,
         parent = Parent
     }
 ) ->
     io:format("~n"),
-    case save_state(Scanned, Stats, PackageMap, TP) of
+    case save_state(Scanned, Stats, PackageMap, TP, PagesConsumed) of
         ok ->
             ok;
         {error, Reason} ->
@@ -320,32 +382,65 @@ dispatch_to_available(
             %% Worker already has pending work, skip to next
             dispatch_to_available(State, RestNodes, Pending);
         false ->
-            %% Dispatch one item to this worker with a unique reference
-            PackageKey = work_key(Item),
-            case maps:is_key(PackageKey, State#coord_state.scanned) of
+            %% Classify the work item
+            WorkKey = work_key(Item),
+            PackageKey = package_key(Item),
+            case maps:is_key(WorkKey, State#coord_state.scanned) of
                 true ->
-                    %% Already scanned, skip this item, try next worker with same work list
+                    %% Already scanned, skip this item
                     dispatch_to_available(
                         State#coord_state{work = Rest}, RestNodes, Pending
                     );
                 false ->
-                    Ref = make_ref(),
-                    ?LOG_DEBUG("Dispatching ~p to worker ~p (ref=~p)", [
-                        PackageKey, WorkerNode, Ref
-                    ]),
-                    gen_server:cast(
-                        {spectrometer_ecosystem_worker_node, WorkerNode},
-                        {work, Ref, Item}
-                    ),
-                    NewPending = maps:put(
-                        Ref, {WorkerNode, PackageKey, Item}, Pending
-                    ),
-                    NewState = State#coord_state{
-                        work = Rest,
-                        pending_work = NewPending
-                    },
-                    %% Continue with remaining workers and remaining work
-                    dispatch_to_available(NewState, RestNodes, NewPending)
+                    case
+                        find_package_id(
+                            PackageKey, State#coord_state.package_names
+                        )
+                    of
+                        {ok, ExistingID} ->
+                            %% Duplicate canonical package - record without dispatching
+                            {Action, NewState} = record_duplicate_package(
+                                WorkKey,
+                                ExistingID,
+                                Rest,
+                                Rest,
+                                Pending,
+                                State#coord_state.ready_workers,
+                                State
+                            ),
+                            case Action of
+                                stop ->
+                                    NewState;
+                                continue ->
+                                    dispatch_to_available(
+                                        NewState, RestNodes, Pending
+                                    )
+                            end;
+                        error ->
+                            %% New unique item - dispatch to worker
+                            Ref = make_ref(),
+                            ?LOG_DEBUG(
+                                "Dispatching ~p to worker ~p (ref=~p)", [
+                                    WorkKey, WorkerNode, Ref
+                                ]
+                            ),
+                            gen_server:cast(
+                                {spectrometer_ecosystem_worker_node,
+                                    WorkerNode},
+                                {work, Ref, Item}
+                            ),
+                            NewPending = maps:put(
+                                Ref, {WorkerNode, WorkKey, Item}, Pending
+                            ),
+                            NewState = State#coord_state{
+                                work = Rest,
+                                pending_work = NewPending
+                            },
+                            %% Continue with remaining workers and remaining work
+                            dispatch_to_available(
+                                NewState, RestNodes, NewPending
+                            )
+                    end
             end
     end.
 
@@ -358,7 +453,13 @@ spawn_replacement() ->
             ?LOG_ERROR("Failed to spawn replacement worker: ~p", [Reason])
     end.
 
--doc false.
+-doc """
+Process a worker result, updating scanned map, stats, and package registry.
+
+Uses separate keys for `Scanned` (source-prefixed work key) and `PackageMap`
+(canonical package name). If the canonical package name already exists, the
+work is recorded under the existing ID without modifying stats.
+""".
 -spec handle_worker_result(
     node(),
     {github | hex, map()},
@@ -371,8 +472,8 @@ spawn_replacement() ->
 ) -> {continue | stop, #coord_state{}}.
 handle_worker_result(
     _WorkerNode,
-    _Item,
-    PackageKey,
+    Item,
+    WorkKey,
     RepoStats,
     Work,
     NewPending,
@@ -387,28 +488,28 @@ handle_worker_result(
         stats = Stats,
         total_processed = TP,
         since_save = SS,
-        total_work = TW,
-        parent = Parent
+        unique_work = UW,
+        parent = Parent,
+        pages_consumed = PagesConsumed
     } = State,
-    {PackageID, NewPN, NewPM, NewNextID} =
+    PackageKey = package_key(Item),
+    {PackageID, NewPN, NewPM, NewNextID, NewUW} =
         case maps:find(PackageKey, PackageNames) of
             {ok, ExistingID} ->
-                {ExistingID, PackageNames, PackageMap, NextID};
+                {ExistingID, PackageNames, PackageMap, NextID, UW};
             error ->
                 ID = NextID,
-                PName = package_name_from_key(PackageKey),
                 PN2 = maps:put(PackageKey, ID, PackageNames),
-                PM2 = maps:put(ID, PName, PackageMap),
-                {ID, PN2, PM2, ID + 1}
+                PM2 = maps:put(ID, PackageKey, PackageMap),
+                {ID, PN2, PM2, ID + 1, UW + 1}
         end,
-    NewScanned = maps:put(PackageKey, PackageID, Scanned),
+    NewScanned = maps:put(WorkKey, PackageID, Scanned),
     NewStats = merge_repo_stats_with_callers(RepoStats, PackageID, Stats),
     NewTP = TP + 1,
     NewSS = SS + 1,
     io:format(
-        standard_error,
-        "\r\tProgress: ~p/~p (~.1f%)",
-        [NewTP, TW, NewTP / max(1, TW) * 100]
+        "\r\tProgress: ~p/~p unique (~.1f%)",
+        [NewTP, NewUW, NewTP / max(1, NewUW) * 100]
     ),
     NewState = State#coord_state{
         work = Work,
@@ -419,14 +520,18 @@ handle_worker_result(
         next_package_id = NewNextID,
         pending_work = NewPending,
         total_processed = NewTP,
-        since_save = NewSS
+        unique_work = NewUW,
+        since_save = NewSS,
+        pages_consumed = State#coord_state.pages_consumed
     },
     %% Check for completion
     case Work =:= [] andalso NewPending =:= #{} of
         true ->
-            io:format("\n"),
+            io:format("~n"),
             %% Save state before stopping
-            case save_state(NewScanned, NewStats, NewPM, NewTP) of
+            case
+                save_state(NewScanned, NewStats, NewPM, NewTP, PagesConsumed)
+            of
                 ok ->
                     ok;
                 {error, Reason} ->
@@ -438,7 +543,12 @@ handle_worker_result(
             %% Save state at intervals
             case NewSS >= ?SAVE_INTERVAL of
                 true ->
-                    case save_state(NewScanned, NewStats, NewPM, NewTP) of
+                    PagesConsumed = NewState#coord_state.pages_consumed,
+                    case
+                        save_state(
+                            NewScanned, NewStats, NewPM, NewTP, PagesConsumed
+                        )
+                    of
                         ok ->
                             {continue, NewState#coord_state{since_save = 0}};
                         {error, Reason} ->
@@ -455,17 +565,89 @@ handle_worker_result(
             end
     end.
 
+-doc """
+Look up the package ID for a canonical package name.
+
+Searches `PackageNames` (the inverse of `PackageMap`) for the given
+canonical key. Returns `{ok, PackageID}` if found, `error` if the
+canonical name has not been registered yet.
+""".
+-spec find_package_id(binary(), #{binary() => non_neg_integer()}) ->
+    {ok, non_neg_integer()} | error.
+find_package_id(PackageKey, PackageNames) ->
+    maps:find(PackageKey, PackageNames).
+
+-doc """
+Record a duplicate work item as scanned without dispatching to a worker.
+
+When a work item's canonical package name already exists in `PackageNames`,
+the item is recorded in `Scanned` with the existing `PackageID` and no
+download or scan is triggered. Stats are not modified -- the original
+package already owns the ID.
+
+Returns `{continue, NewState}` if more work remains, or `{stop, NewState}`
+if all work is complete.
+""".
+-spec record_duplicate_package(
+    binary(),
+    non_neg_integer(),
+    [{github, map()} | {hex, map()}],
+    [{github, map()} | {hex, map()}],
+    #{reference() => {node(), binary(), {github | hex, map()}}},
+    sets:set(node()),
+    #coord_state{}
+) -> {continue | stop, #coord_state{}}.
+record_duplicate_package(
+    WorkKey,
+    PackageID,
+    Work,
+    Rest,
+    NewPending,
+    _ReadyWorkers,
+    State
+) ->
+    #coord_state{
+        scanned = Scanned,
+        stats = Stats,
+        total_processed = TP,
+        since_save = SS,
+        unique_work = UW,
+        parent = Parent
+    } = State,
+    NewScanned = maps:put(WorkKey, PackageID, Scanned),
+    NewTP = TP + 1,
+    NewSS = SS + 1,
+    ?LOG_DEBUG(
+        "Progress: ~p/~p unique (~.1f%) [duplicate]",
+        [NewTP, UW, NewTP / max(1, UW) * 100]
+    ),
+    NewState = State#coord_state{
+        work = Rest,
+        scanned = NewScanned,
+        stats = Stats,
+        total_processed = NewTP,
+        since_save = NewSS,
+        pages_consumed = State#coord_state.pages_consumed
+    },
+    case Work =:= [] andalso NewPending =:= #{} of
+        true ->
+            Parent ! {coordinator_done, Stats},
+            {stop, NewState};
+        false ->
+            {continue, NewState}
+    end.
+
 -spec work_key({github | hex, map()}) -> binary().
 work_key({github, #{full_name := Name}}) ->
     list_to_binary("github:" ++ Name);
 work_key({hex, #{name := Name}}) ->
     list_to_binary("hex:" ++ Name).
 
--spec package_name_from_key(binary()) -> binary().
-package_name_from_key(<<"github:", Name/binary>>) ->
-    Name;
-package_name_from_key(<<"hex:", Name/binary>>) ->
-    Name.
+-spec package_key({github | hex, map()}) -> binary().
+package_key({github, #{full_name := FullName}}) ->
+    list_to_binary(filename:basename(FullName));
+package_key({hex, #{name := Name}}) ->
+    spectrometer_utils:ensure_binary(Name).
 
 -spec merge_repo_stats_with_callers(
     #{{binary(), binary(), arity()} => non_neg_integer()},
@@ -525,10 +707,13 @@ merge_repo_stats_with_callers(RepoStats, PackageID, GlobalStats) ->
         }
     },
     #{non_neg_integer() => binary()},
-    non_neg_integer()
+    non_neg_integer(),
+    #{github => pos_integer(), hex => pos_integer()}
 ) -> ok | {error, term()}.
-save_state(Scanned, Stats, PackageMap, TotalProcessed) ->
-    State = {spectrometer_v1, Scanned, Stats, PackageMap, TotalProcessed},
+save_state(Scanned, Stats, PackageMap, TotalProcessed, PagesConsumed) ->
+    State =
+        {spectrometer_v0_r2, Scanned, Stats, PackageMap, TotalProcessed,
+            PagesConsumed},
     CacheDir =
         case application:get_env(spectrometer, cache_dir) of
             undefined -> spectrometer_utils:user_cache_path();

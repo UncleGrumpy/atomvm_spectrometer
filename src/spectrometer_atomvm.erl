@@ -492,12 +492,17 @@ parse_query_string(Query) ->
                             {error, "Empty module or function"}
                     end;
                 _ ->
-                    ModBin = case spectrometer_utils:is_elixir_module_name(Query) of
-                        true ->
-                            spectrometer_utils:normalize_module_name(Query, true);
-                        false ->
-                            spectrometer_utils:normalize_module_name(Query, false)
-                    end,
+                    ModBin =
+                        case spectrometer_utils:is_elixir_module_name(Query) of
+                            true ->
+                                spectrometer_utils:normalize_module_name(
+                                    Query, true
+                                );
+                            false ->
+                                spectrometer_utils:normalize_module_name(
+                                    Query, false
+                                )
+                        end,
                     {ok, ModBin}
             end
     end.
@@ -634,7 +639,8 @@ print_supported(Mod, Filter) ->
                 true ->
                     io:format(
                         standard_error,
-                        "Module ~ts is not an Erlang module (filter: --erl)\n",
+                        "Module ~ts is not an Erlang module (filter: --erl), but has Elixir functions in the database.\n"
+                        "Use --ex filter (or no filter) to see them\n",
                         [format_mod_name(Mod)]
                     ),
                     {error, unsupported};
@@ -668,7 +674,8 @@ do_print_supported(Mod) ->
                 standard_error,
                 "Module ~ts not found in AtomVM supported database\n",
                 [format_mod_name(Mod)]
-            )
+            ),
+            {error, unsupported}
     end.
 
 -spec filter_modules_by_type([binary()], atom() | undefined) -> [binary()].
