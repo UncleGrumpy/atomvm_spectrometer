@@ -121,96 +121,95 @@ is_older_since_both_unreleased_test_() ->
 
 merge_entry_both_all_test_() ->
     {"merges two all-platform entries", fun() ->
-        E1 = {all, <<"v0.4.0">>},
-        E2 = {all, <<"v0.5.0">>},
-        {Plats, Since} = spectrometer_updater:merge_entry(E1, E2),
+        E1 = {all, #{all => <<"v0.4.0">>}},
+        E2 = {all, #{all => <<"v0.5.0">>}},
+        {Plats, SM} = spectrometer_updater:merge_entry(E1, E2),
         ?assertEqual(all, Plats),
-        ?assertEqual(<<"v0.4.0">>, Since)
+        ?assertEqual(#{all => <<"v0.4.0">>}, SM)
     end}.
 
 merge_entry_list_platforms_test_() ->
     {"merges platform lists", fun() ->
-        E1 = {[esp32], <<"v0.4.0">>},
-        E2 = {[rp2], <<"v0.5.0">>},
-        {Plats, Since} = spectrometer_updater:merge_entry(E1, E2),
-        ?assertEqual([esp32, rp2], Plats),
-        ?assertEqual(<<"v0.4.0">>, Since)
+        E1 = {[esp32], #{esp32 => <<"v0.4.0">>}},
+        E2 = {[rp2], #{rp2 => <<"v0.5.0">>}},
+        {Plats, SM} = spectrometer_updater:merge_entry(E1, E2),
+        ?assertEqual([esp32, rp2], lists:sort(Plats)),
+        ?assertEqual(#{esp32 => <<"v0.4.0">>, rp2 => <<"v0.5.0">>}, SM)
     end}.
 
 merge_entry_all_with_list_test_() ->
-    {"all merged with list stays all", fun() ->
-        E1 = {all, <<"v0.4.0">>},
-        E2 = {[esp32], <<"v0.5.0">>},
-        {Plats, Since} = spectrometer_updater:merge_entry(E1, E2),
-        ?assertEqual(all, Plats),
-        ?assertEqual(<<"v0.4.0">>, Since)
+    {"all merged with list uses specific platforms", fun() ->
+        E1 = {all, #{all => <<"v0.4.0">>}},
+        E2 = {[esp32], #{esp32 => <<"v0.5.0">>}},
+        {Plats, SM} = spectrometer_updater:merge_entry(E1, E2),
+        ?assertEqual([esp32], Plats),
+        ?assertEqual(#{esp32 => <<"v0.5.0">>}, SM)
     end}.
 
 %% =============================================================================
-%% merge_since/2 tests
+%% merge_since_maps/2 tests
 %% =============================================================================
 
-merge_since_two_tags_test_() ->
-    {"two tags: older wins", fun() ->
+merge_since_maps_two_versions_test_() ->
+    {"two since_maps with binary versions: older wins", fun() ->
+        SM1 = #{all => <<"v0.4.0">>},
+        SM2 = #{all => <<"v0.5.0">>},
         ?assertEqual(
-            <<"v0.4.0">>,
-            spectrometer_updater:merge_since(<<"v0.4.0">>, <<"v0.5.0">>)
+            #{all => <<"v0.4.0">>},
+            spectrometer_updater:merge_since_maps(SM1, SM2)
         ),
         ?assertEqual(
-            <<"v0.4.0">>,
-            spectrometer_updater:merge_since(<<"v0.5.0">>, <<"v0.4.0">>)
+            #{all => <<"v0.4.0">>},
+            spectrometer_updater:merge_since_maps(SM2, SM1)
         )
     end}.
 
-merge_since_tag_vs_unreleased_test_() ->
-    {"tag vs unreleased: tag wins", fun() ->
-        ?assertEqual(
-            <<"v0.5.0">>,
-            spectrometer_updater:merge_since(
-                <<"v0.5.0">>, {unreleased, <<"main">>}
-            )
-        ),
-        ?assertEqual(
-            <<"v0.5.0">>,
-            spectrometer_updater:merge_since(
-                {unreleased, <<"main">>}, <<"v0.5.0">>
-            )
-        )
+merge_since_maps_platform_specific_test_() ->
+    {"platform-specific since_maps merge correctly", fun() ->
+        SM1 = #{esp32 => <<"v0.4.0">>},
+        SM2 = #{rp2 => <<"v0.5.0">>},
+        Result = spectrometer_updater:merge_since_maps(SM1, SM2),
+        ?assertEqual(#{esp32 => <<"v0.4.0">>, rp2 => <<"v0.5.0">>}, Result)
     end}.
 
-merge_since_both_unreleased_test_() ->
-    {"two unreleased: lexicographically first wins", fun() ->
-        ?assertEqual(
-            {unreleased, <<"0.6.x">>},
-            spectrometer_updater:merge_since(
-                {unreleased, <<"0.6.x">>}, {unreleased, <<"0.7.x">>}
-            )
-        ),
-        ?assertEqual(
-            {unreleased, <<"0.6.x">>},
-            spectrometer_updater:merge_since(
-                {unreleased, <<"0.7.x">>}, {unreleased, <<"0.6.x">>}
-            )
-        ),
-        ?assertEqual(
-            {unreleased, <<"0.7.x">>},
-            spectrometer_updater:merge_since(
-                {unreleased, <<"0.7.x">>}, {unreleased, <<"main">>}
-            )
-        ),
-        ?assertEqual(
-            {unreleased, <<"0.7.x">>},
-            spectrometer_updater:merge_since(
-                {unreleased, <<"main">>}, {unreleased, <<"0.7.x">>}
-            )
-        )
+merge_since_maps_overlapping_platforms_test_() ->
+    {"overlapping platforms keep older version", fun() ->
+        SM1 = #{esp32 => <<"v0.4.0">>, rp2 => <<"v0.6.0">>},
+        SM2 = #{esp32 => <<"v0.5.0">>, rp2 => <<"v0.5.0">>},
+        Result = spectrometer_updater:merge_since_maps(SM1, SM2),
+        ?assertEqual(#{esp32 => <<"v0.4.0">>, rp2 => <<"v0.5.0">>}, Result)
     end}.
 
-merge_since_fallback_test_() ->
-    {"fallback keeps existing", fun() ->
-        ?assertEqual(
-            all, spectrometer_updater:merge_since(all, something_else)
-        )
+merge_since_maps_all_with_specific_same_version_test_() ->
+    {"all + specific platforms with same version drops all", fun() ->
+        SM1 = #{all => <<"v0.5.0">>},
+        SM2 = #{esp32 => <<"v0.5.0">>},
+        Result = spectrometer_updater:merge_since_maps(SM1, SM2),
+        ?assertEqual(#{esp32 => <<"v0.5.0">>}, Result)
+    end}.
+
+merge_since_maps_all_with_specific_different_version_test_() ->
+    {"all + specific platforms with different version drops all", fun() ->
+        SM1 = #{all => <<"v0.4.0">>},
+        SM2 = #{esp32 => <<"v0.5.0">>},
+        Result = spectrometer_updater:merge_since_maps(SM1, SM2),
+        ?assertEqual(#{esp32 => <<"v0.5.0">>}, Result)
+    end}.
+
+merge_since_maps_all_only_test_() ->
+    {"all-only since_map is preserved", fun() ->
+        SM1 = #{all => <<"v0.5.0">>},
+        SM2 = #{all => <<"v0.5.0">>},
+        Result = spectrometer_updater:merge_since_maps(SM1, SM2),
+        ?assertEqual(#{all => <<"v0.5.0">>}, Result)
+    end}.
+
+merge_since_maps_all_with_multiple_specific_test_() ->
+    {"all + multiple specific platforms drops all", fun() ->
+        SM1 = #{all => <<"v0.5.0">>},
+        SM2 = #{esp32 => <<"v0.5.0">>, rp2 => <<"v0.6.0">>},
+        Result = spectrometer_updater:merge_since_maps(SM1, SM2),
+        ?assertEqual(#{esp32 => <<"v0.5.0">>, rp2 => <<"v0.6.0">>}, Result)
     end}.
 
 %% =============================================================================
@@ -747,12 +746,12 @@ merge_platforms_all_both_all_test_() ->
     end}.
 
 merge_platforms_all_all_with_list_test_() ->
-    {"all + list = all", fun() ->
+    {"all + list uses specific platforms", fun() ->
         ?assertEqual(
-            all, spectrometer_updater:merge_platforms_all(all, [esp32])
+            [esp32], spectrometer_updater:merge_platforms_all(all, [esp32])
         ),
         ?assertEqual(
-            all, spectrometer_updater:merge_platforms_all([esp32], all)
+            [esp32], spectrometer_updater:merge_platforms_all([esp32], all)
         )
     end}.
 
@@ -782,9 +781,9 @@ merge_platforms_all_all_platforms_test_() ->
 %% =============================================================================
 
 merge_platforms_all_case_test_() ->
-    {"all + platform = all", fun() ->
-        ?assertEqual(all, spectrometer_updater:merge_platforms(all, esp32)),
-        ?assertEqual(all, spectrometer_updater:merge_platforms(all, stm32))
+    {"all + platform atom uses specific platform", fun() ->
+        ?assertEqual([esp32], spectrometer_updater:merge_platforms(all, esp32)),
+        ?assertEqual([stm32], spectrometer_updater:merge_platforms(all, stm32))
     end}.
 
 merge_platforms_new_platform_test_() ->
@@ -844,11 +843,11 @@ build_db_from_list_test_() ->
         ],
         DB = spectrometer_updater:build_db_from_list(Data),
         ?assertEqual(
-            {all, {unreleased, <<"main">>}},
+            {all, #{all => {unreleased, <<"main">>}}, undefined},
             maps:get({<<"my_module">>, <<"func1">>, 1}, DB)
         ),
         ?assertEqual(
-            {[esp32], {unreleased, <<"main">>}},
+            {[esp32], #{esp32 => {unreleased, <<"main">>}}, undefined},
             maps:get({<<"my_module">>, <<"func2">>, 2}, DB)
         )
     end}.
@@ -862,7 +861,7 @@ build_db_from_list_atom_keys_test_() ->
         ],
         DB = spectrometer_updater:build_db_from_list(Data),
         ?assertEqual(
-            {all, {unreleased, <<"main">>}},
+            {all, #{all => {unreleased, <<"main">>}}, undefined},
             maps:get({<<"my_module">>, <<"func1">>, 1}, DB)
         )
     end}.
@@ -1159,6 +1158,112 @@ find_elixir_exports_test_() ->
         ?assertEqual(Expected, lists:sort(Exports))
     end}.
 
+scan_repo_operator_functions_test_() ->
+    {setup,
+        fun() ->
+            Dir = spectrometer_utils:make_temp_dir(""),
+            ok = filelib:ensure_path(Dir),
+            Dir
+        end,
+        fun spectrometer_utils:purge_dir/1,
+        {with, [
+            fun(_RepoDir) ->
+                ?_test(begin
+                    RepoDir = spectrometer_utils:make_temp_dir(
+                        "updater_repo_test_operators_"
+                    ),
+                    ok = filelib:ensure_path(RepoDir),
+                    try
+                        LibDir = filename:join(RepoDir, "src/libAtomVM"),
+                        ok = filelib:ensure_path(LibDir),
+
+                        % Create bifs.gperf with operator functions
+                        BifsContent =
+                            "%%\n" ++
+                                "erlang:self/0, bif_self\n" ++
+                                "erlang:node/0, bif_node\n" ++
+                                "erlang:/=/2, bif_not_equal\n" ++
+                                "erlang:=/=/2, bif_exactly_not_equal\n" ++
+                                "erlang:+/2, bif_plus\n" ++
+                                "erlang:-/1, bif_minus\n" ++
+                                "erlang:*/2, bif_mult\n" ++
+                                "\n",
+                        ok = file:write_file(
+                            filename:join(LibDir, "bifs.gperf"), BifsContent
+                        ),
+
+                        % Create nifs.gperf with operator functions
+                        NifsContent =
+                            "%%\n" ++
+                                "erlang:++/2, &concat_nif\n" ++
+                                "erlang:--/2, &subtract_nif\n" ++
+                                "erlang:!/2, &send_nif\n" ++
+                                "erlang:error/1, &error_nif\n" ++
+                                "\n",
+                        ok = file:write_file(
+                            filename:join(LibDir, "nifs.gperf"), NifsContent
+                        ),
+
+                        Acc = spectrometer_updater:scan_atomvm_repo(
+                            RepoDir, #{tests => false}, {unreleased, <<"main">>}
+                        ),
+
+                        Erlang = <<"erlang">>,
+                        % Standard functions from bifs.gperf
+                        ?assert(
+                            maps:is_key({Erlang, <<"self">>, 0}, Acc),
+                            "Expected erlang:self/0 from bifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"node">>, 0}, Acc),
+                            "Expected erlang:node/0 from bifs.gperf"
+                        ),
+
+                        % Operator functions from bifs.gperf
+                        ?assert(
+                            maps:is_key({Erlang, <<"=/=">>, 2}, Acc),
+                            "Expected erlang:=/=/2 from bifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"/=">>, 2}, Acc),
+                            "Expected erlang:/=/2 from bifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"+">>, 2}, Acc),
+                            "Expected erlang:+/2 from bifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"-">>, 1}, Acc),
+                            "Expected erlang:-/1 from bifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"*">>, 2}, Acc),
+                            "Expected erlang:*/2 from bifs.gperf"
+                        ),
+
+                        % Operator functions from nifs.gperf
+                        ?assert(
+                            maps:is_key({Erlang, <<"++">>, 2}, Acc),
+                            "Expected erlang:++/2 from nifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"--">>, 2}, Acc),
+                            "Expected erlang:--/2 from nifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"!">>, 2}, Acc),
+                            "Expected erlang:!/2 from nifs.gperf"
+                        ),
+                        ?assert(
+                            maps:is_key({Erlang, <<"error">>, 1}, Acc),
+                            "Expected erlang:error/1 from nifs.gperf"
+                        )
+                    after
+                        spectrometer_utils:purge_dir(RepoDir)
+                    end
+                end)
+            end
+        ]}}.
 scan_exavmlib_dir_test_() ->
     {"scans exavmlib directory for .ex files",
         {setup,

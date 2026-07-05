@@ -134,7 +134,7 @@ fetch_github_repos_test_() ->
             case os:getenv("SKIP_NETWORK_TESTS") of
                 false ->
                     %% Fetch a small number of repos to test API connectivity and parsing
-                    Repos = spectrometer_http:fetch_github_repos({2, 2000}),
+                    Repos = spectrometer_http:fetch_github_repos({2, 2000}, 1),
                     ?assert(is_list(Repos)),
                     ?assert(length(Repos) >= 1),
                     %% Verify structure of first repo
@@ -159,7 +159,7 @@ fetch_github_cursor_advances_test_() ->
                 false ->
                     %% Fetch more repos than the API returns a single page to verify
                     %% that the cursor advances and we don't get duplicate repos
-                    Repos = spectrometer_http:fetch_github_repos({100, 1}),
+                    Repos = spectrometer_http:fetch_github_repos({100, 1}, 1),
                     ?assert(is_list(Repos)),
                     ?assert(length(Repos) >= 50),
                     %% Verify no duplicate repos (full_name should be unique)
@@ -181,7 +181,7 @@ fetch_hex_packages_test_() ->
             case os:getenv("SKIP_NETWORK_TESTS") of
                 false ->
                     %% Fetch a small number of packages to test API connectivity
-                    Packages = spectrometer_http:fetch_hex_packages(2),
+                    Packages = spectrometer_http:fetch_hex_packages(2, 1),
                     ?assert(is_list(Packages)),
                     ?assert(length(Packages) >= 1),
                     %% Verify structure of first package
@@ -205,7 +205,7 @@ fetch_hex_packages_large_limit_test_() ->
             case os:getenv("SKIP_NETWORK_TESTS") of
                 false ->
                     %% Fetch more packages to test pagination logic
-                    Packages = spectrometer_http:fetch_hex_packages(150),
+                    Packages = spectrometer_http:fetch_hex_packages(150, 1),
                     ?assert(is_list(Packages)),
                     %% Should return up to 150 packages (may be less due to API limits)
                     ?assert(length(Packages) >= 1),
@@ -393,6 +393,48 @@ integration_hex_small_package_test_() ->
         _ ->
             {"skipped (SKIP_NETWORK_TESTS set)", fun() -> ok end}
     end.
+
+fetch_github_repos_small_limit_test_() ->
+    {"fetch_github_repos with limit 50 returns exactly 50 repos", fun() ->
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                Repos = spectrometer_http:fetch_github_repos({50, 1}, 1),
+                ?assertEqual(50, length(Repos));
+            _ ->
+                ok
+        end
+    end}.
+
+fetch_github_repos_stable_range_test_() ->
+    {"fetch_github_repos does not collapse star range prematurely", fun() ->
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                Repos = spectrometer_http:fetch_github_repos({10, 2000}, 1),
+                ?assert(length(Repos) >= 1),
+                lists:foreach(
+                    fun(R) ->
+                        ?assert(maps:get(stars, R) >= 2000)
+                    end,
+                    Repos
+                );
+            _ ->
+                ok
+        end
+    end}.
+
+fetch_github_repos_no_duplicates_test_() ->
+    {"fetch_github_repos returns unique repos across pages", fun() ->
+        case os:getenv("SKIP_NETWORK_TESTS") of
+            false ->
+                Repos = spectrometer_http:fetch_github_repos({150, 1}, 1),
+                ?assert(length(Repos) >= 100),
+                FullNames = [maps:get(full_name, R) || R <- Repos],
+                UniqueNames = lists:usort(FullNames),
+                ?assertEqual(length(UniqueNames), length(FullNames));
+            _ ->
+                ok
+        end
+    end}.
 
 %% =============================================================================
 %% Test helpers

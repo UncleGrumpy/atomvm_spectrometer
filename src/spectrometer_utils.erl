@@ -10,6 +10,8 @@
 
 -module(spectrometer_utils).
 
+-include_lib("kernel/include/logger.hrl").
+
 -moduledoc """
 Utility functions shared across the application.
 
@@ -19,7 +21,7 @@ directory removal, and GitHub URL normalization for deduplication.
 """.
 
 -export([
-    string_to_binary/1,
+    ensure_binary/1,
     clone_temp_repo/2,
     bundled_data_path/0,
     is_elixir_module_name/1,
@@ -28,7 +30,6 @@ directory removal, and GitHub URL normalization for deduplication.
     normalize_module_name/2,
     normalize_platform_name/1,
     purge_dir/1,
-    run_git_command/2,
     start_applications/0,
     user_cache_path/0,
     user_db_file/0,
@@ -37,12 +38,17 @@ directory removal, and GitHub URL normalization for deduplication.
 
 -type platform() :: emscripten | esp32 | generic_unix | rp2 | stm32.
 
--doc "If the given string is not already a binary string, convert it to binary".
--spec string_to_binary(string() | binary()) -> binary().
-string_to_binary(Str) when is_list(Str) ->
-    list_to_binary(Str);
-string_to_binary(Bin) when is_binary(Bin) ->
-    Bin.
+-doc "Convert atoms or strings to binary".
+-spec ensure_binary(term()) -> binary().
+ensure_binary(B) when is_binary(B) -> B;
+ensure_binary(A) when is_atom(A) -> atom_to_binary(A, utf8);
+ensure_binary(S) when is_list(S) -> list_to_binary(S);
+ensure_binary(T) ->
+    ?LOG_WARNING(
+        "ensure_binary/1 received unexpected type ~p, returning empty binary.",
+        [T]
+    ),
+    <<>>.
 
 -doc """
 Return the path to the bundled human-readable data file.
@@ -95,6 +101,7 @@ user_db_file() ->
 -doc false.
 %% Find the bundled human-readable data file.
 %% Tries code:priv_dir first, then falls back to paths relative to the escript.
+-spec bundled_db_file() -> string().
 bundled_db_file() ->
     case code:priv_dir(spectrometer) of
         Priv when is_list(Priv) ->
@@ -110,6 +117,7 @@ bundled_db_file() ->
 -doc false.
 %% For escript builds: resolve path relative to the escript binary location.
 %% Tries multiple candidate paths (rebar3 build, installed, source tree).
+-spec try_script_relative() -> string() | false.
 try_script_relative() ->
     ScriptDir =
         case filename:dirname(escript:script_name()) of
@@ -150,6 +158,7 @@ try_script_relative() ->
 
 -doc false.
 %% Find the first existing file from a list of candidate paths.
+-spec find_first_file([string()]) -> string() | false.
 find_first_file([Path | Rest]) ->
     case filelib:is_regular(Path) of
         true -> Path;
@@ -167,6 +176,7 @@ integer suffix. The directory will be created in a sub-directory of
 "test_cache_" the result would be similar to:
 >`/tmp/spectrometer/test_cache_454279`
 """.
+-spec make_temp_dir(string()) -> string().
 make_temp_dir(Prefix) ->
     Rand = integer_to_list(erlang:unique_integer([positive])),
     Dir = filename:join([system_temp_dir(), "spectrometer", Prefix ++ Rand]),
@@ -187,35 +197,24 @@ purge_dir(Dir) ->
     end.
 
 -doc "Run a git command safely using open_port with spawn_executable, with environment vars".
--spec run_git_command([string()], [{string(), string()}]) ->
+-spec run_git_command([string()], [{string(), string()}] | '[]') ->
     {ok, string()} | {error, term()}.
 run_git_command(Args, EnvVars) ->
     Cmd = "git",
-    case find_executable(Cmd) of
-        {ok, ExecPath} ->
-            PortOpts = [{args, Args}, exit_status, {line, 16384}],
-            PortOpts1 =
-                case EnvVars of
-                    [] -> PortOpts;
-                    _ -> [{env, EnvVars} | PortOpts]
-                end,
+    case os:find_executable(Cmd) of
+        false ->
+            {error, {executable_not_found, Cmd}};
+        ExecPath ->
+            PortOpts = [
+                {args, Args}, exit_status, {line, 16384}, {env, EnvVars}
+            ],
             try
-                Port = open_port({spawn_executable, ExecPath}, PortOpts1),
+                Port = open_port({spawn_executable, ExecPath}, PortOpts),
                 gather_git_output(Port, [])
             catch
                 error:Reason ->
                     {error, Reason}
-            end;
-        {error, not_found} ->
-            {error, {executable_not_found, Cmd}}
-    end.
-
--doc "Find an executable in PATH or return error if not found".
--spec find_executable(string()) -> {ok, string()} | {error, not_found}.
-find_executable(Cmd) ->
-    case os:find_executable(Cmd) of
-        false -> {error, not_found};
-        Path -> {ok, Path}
+            end
     end.
 
 -doc "Gather output from a port until it closes for git commands".
@@ -230,12 +229,14 @@ gather_git_output(Port, Acc) ->
             gather_git_output(Port, [Line ++ "\n" | Acc]);
         {Port, {data, {noeol, Line}}} ->
             gather_git_output(Port, [Line | Acc])
-    after 120000 ->
+    after 180000 ->
         port_close(Port),
         drain_port_messages(Port),
-        {error, timeout}
+        {error, git_timeout}
     end.
+
 %% Drain any pending messages for a closed port to avoid mailbox pollution.
+-spec drain_port_messages(port()) -> ok.
 drain_port_messages(Port) ->
     receive
         {Port, _} -> drain_port_messages(Port)
@@ -262,6 +263,7 @@ of GitHub repository URLs across different formats.
 "https://github.com/atomvm/atomvm.git"
 ```
 """.
+-spec normalize_github_url(string()) -> string().
 normalize_github_url(Url) ->
     Url1 = string:lowercase(Url),
     Url2 = string:trim(Url1),
@@ -297,17 +299,26 @@ optionally a specific tag can be checked out as well. The function returns the p
 repository. Errors during cloning or checkout are printed to the console, and the function halts
 with an error code if cloning fails.
 """.
+-ifdef(TEST).
+-define(GIT_ENV, [
+    {"PATH", os:getenv("PATH", "/bin:/usr/bin:/usr/local/bin")},
+    {"GIT_TERMINAL_PROMPT", "0"},
+    {"SSH_ASKPASS", false}
+]).
+-else.
+-define(GIT_ENV, [{"GIT_TERMINAL_PROMPT", "0"}]).
+-endif.
 -spec clone_temp_repo(string(), string() | undefined) ->
     string() | {error, Reason :: term()}.
 clone_temp_repo(Branch, Tag) ->
     TmpDir = spectrometer_utils:make_temp_dir("avm_update_"),
-    Url = "https://github.com/atomvm/AtomVM",
-    io:format("Cloning ~s (branch ~s) to ~s...\n", [Url, Branch, TmpDir]),
+    Url = "https://github.com/atomvm/AtomVM.git",
+    ?LOG_DEBUG("Cloning ~s (branch ~s) to ~s", [Url, Branch, TmpDir]),
     CloneResult = run_git_command(
         [
             "clone", "--quiet", "--depth", "1", "-b", Branch, Url, TmpDir
         ],
-        [{"GIT_TERMINAL_PROMPT", "0"}]
+        ?GIT_ENV
     ),
     case CloneResult of
         {ok, _} ->
@@ -315,14 +326,14 @@ clone_temp_repo(Branch, Tag) ->
                 undefined ->
                     TmpDir;
                 TagStr when is_list(TagStr) ->
-                    io:format("Checking out tag ~s...\n", [TagStr]),
+                    ?LOG_DEBUG("Checking out tag ~s", [TagStr]),
                     _ = run_git_command(
                         ["-C", TmpDir, "fetch", "--tags", "--quiet"],
-                        [{"GIT_TERMINAL_PROMPT", "0"}]
+                        ?GIT_ENV
                     ),
                     CheckoutResult = run_git_command(
                         ["-C", TmpDir, "checkout", "--quiet", TagStr],
-                        [{"GIT_TERMINAL_PROMPT", "0"}]
+                        ?GIT_ENV
                     ),
                     case CheckoutResult of
                         {ok, _} ->
@@ -338,11 +349,11 @@ clone_temp_repo(Branch, Tag) ->
                     end
             end;
         {error, Reason} when is_tuple(Reason); is_atom(Reason) ->
-            io:format("Error: Could not clone ~s: ~p\n", [Url, Reason]),
+            ?LOG_ERROR("Could not clone ~s: ~p", [Url, Reason]),
             _ = purge_dir(TmpDir),
             {error, Reason};
         Error ->
-            io:format("Error: Could not clone ~s: ~p\n", [Url, Error]),
+            ?LOG_ERROR("Could not clone ~s: ~p", [Url, Error]),
             _ = purge_dir(TmpDir),
             Error
     end.
@@ -443,13 +454,13 @@ normalize_module_name(Atom, ElixirFlag) when is_atom(Atom) ->
 normalize_module_name(Str, true) when is_list(Str) ->
     case Str of
         "Elixir." ++ _ ->
-            string_to_binary(Str);
+            list_to_binary(Str);
         [C | _] when C >= $A, C =< $Z ->
             % Capitalized module name - treat as Elixir module
-            string_to_binary("Elixir." ++ Str);
+            list_to_binary("Elixir." ++ Str);
         _ ->
             % Lowercase (Erlang module) or other - keep as-is
-            string_to_binary(Str)
+            list_to_binary(Str)
     end;
 normalize_module_name(Bin, true) when is_binary(Bin) ->
     case Bin of
@@ -457,7 +468,5 @@ normalize_module_name(Bin, true) when is_binary(Bin) ->
         <<C, _/binary>> when C >= $A, C =< $Z -> <<"Elixir.", Bin/binary>>;
         _ -> Bin
     end;
-normalize_module_name(Str, false) when is_list(Str) ->
-    string_to_binary(Str);
-normalize_module_name(Str, false) when is_binary(Str) ->
-    Str.
+normalize_module_name(Str, false) ->
+    ensure_binary(Str).

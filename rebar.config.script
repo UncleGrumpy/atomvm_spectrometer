@@ -26,9 +26,17 @@ Version =
             end
     end.
 
+DefaultOpts =
+    case list_to_integer(erlang:system_info(otp_release)) of
+        Rel when Rel >= 29 ->
+            [debug_info, beam_debug_info, {i, "include"}];
+        _ ->
+            [debug_info, {i, "include"}]
+    end.
+
 [
     {minimum_otp_vsn, "27"},
-    {erl_opts, [debug_info, {i, "include"}]},
+    {erl_opts, DefaultOpts},
     {deps, []},
     {escript_incl_apps, [spectrometer]},
     {escript_main_app, spectrometer},
@@ -60,21 +68,30 @@ Version =
         {warnings, [error_handling, unmatched_returns]}
     ]},
     {xref_ignores, [
-        {spectrometer, main, 1},
         {spectrometer_reporter, generate_report, 1},
         {spectrometer_reporter, print_summary, 1},
         {spectrometer_reporter, write_csv, 3}
     ]},
     {profiles, [
+        {dev, [
+            {erl_opts,
+                DefaultOpts ++
+                    [
+                        {d, 'TEST', true},
+                        export_all,
+                        nowarn_export_all,
+                        warnings_as_errors
+                    ]}
+        ]},
         {test, [
-            {erl_opts, [
-                {i, "include"},
-                debug_info,
-                {d, 'TEST', true},
-                export_all,
-                nowarn_export_all,
-                warnings_as_errors
-            ]},
+            {erl_opts,
+                DefaultOpts ++
+                    [
+                        {d, 'TEST', true},
+                        export_all,
+                        nowarn_export_all,
+                        warnings_as_errors
+                    ]},
             {cover_enabled, true},
             {cover_opts, [verbose]},
             {cover_excl_mods, [spectrometer]},
@@ -95,8 +112,8 @@ Version =
                     %% <<"CHANGELOG.md">>,
                     %% <<"CONTRIBUTING.md">>,
                     %% <<"CODE_OF_CONDUCT.md">>,
-                    <<"LICENSE">>,
-                    <<"TODO.md">>
+                    <<"TODO.md">>,
+                    <<"LICENSES/Apache-2.0.txt">>
                 ]},
                 {main, <<"README.md">>},
                 {output, "doc"},
@@ -108,7 +125,7 @@ Version =
             {plugins, [erlfmt, rebar3_uncovered]}
         ]},
         {prod, [
-            {erl_opts, [debug_info, {i, "include"}, nowarn_sasl, {sasl, false}]}
+            {erl_opts, [debug_info, {i, "include"}]}
         ]}
     ]},
 

@@ -9,6 +9,8 @@
 
 -module(spectrometer).
 
+-ignore_xref(main/1).
+
 -moduledoc """
 Main entry point for the atomvm_spectrometer escript.
 

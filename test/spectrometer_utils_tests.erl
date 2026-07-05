@@ -253,28 +253,6 @@ http_get_test_() ->
     end.
 
 %% =============================================================================
-%% find_executable/1 tests
-%% =============================================================================
-
-find_executable_exists_test_() ->
-    {"finds git executable when present",
-        case os:find_executable("git") of
-            false ->
-                {skip, "git not in PATH"};
-            Path ->
-                ?_assertEqual(
-                    {ok, Path}, spectrometer_utils:find_executable("git")
-                )
-        end}.
-
-find_executable_not_found_test_() ->
-    {"returns error for non-existent executable",
-        ?_assertEqual(
-            {error, not_found},
-            spectrometer_utils:find_executable("nonexistent_command_xyz123")
-        )}.
-
-%% =============================================================================
 %% run_git_command/2 tests
 %% =============================================================================
 

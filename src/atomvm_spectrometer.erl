@@ -8,6 +8,8 @@
 %% SPDX-License-Identifier: Apache-2.0
 -module(atomvm_spectrometer).
 
+-include_lib("kernel/include/logger.hrl").
+
 -moduledoc """
 Main entry point for the atomvm_spectrometer application.
 
@@ -25,6 +27,9 @@ of audit, ecosystem, supported, filter, update, and query operations.
 -type command_name() ::
     audit | ecosystem | examine | supported | filter | update | query.
 
+-type log_level() ::
+    debug | info | notice | warning | error | critical | alert | emergency.
+
 -type opts_map() :: #{atom() => term()}.
 
 -doc """
@@ -39,16 +44,39 @@ and terminates the process. In test mode (`TEST=true`), returns `ok` or
 -else.
 -spec main([string()]) -> no_return().
 -endif.
-main(Args) ->
+main(GlobalArgs) ->
+    case spectrometer_utils:start_applications() of
+        {error, already_started} ->
+            ok;
+        {error, Reason0} ->
+            io:format(
+                "Failed to start required applications: ~p\n",
+                [Reason0]
+            ),
+            maybe_halt(1);
+        ok ->
+            ok
+    end,
+    Args =
+        case configure_logger(GlobalArgs) of
+            {ok, CommandArgs} ->
+                CommandArgs;
+            {error, Reason1} ->
+                io:format("Failed to configure logger: ~s\n", [Reason1]),
+                maybe_halt(1)
+        end,
     case parse_args(Args) of
         {error, Msg} ->
-            io:format(standard_error, "Error: ~s\n", [Msg]),
+            ?LOG_ERROR("Configuration problem: ~s", [Msg]),
             spectrometer_help:usage(),
             maybe_halt(1);
         version ->
             case spectrometer_utils:version() of
                 {error, Reason} ->
-                    io:format("Unable to determine version: ~p\n", [Reason]),
+                    ?LOG_ERROR("Unable to determine version: ~p", [
+                        Reason
+                    ]),
+                    io:format("unknown\n"),
                     maybe_halt(1);
                 Version ->
                     io:format("~s\n", [Version]),
@@ -62,18 +90,20 @@ main(Args) ->
             maybe_halt(0);
         {command, audit, Opts} ->
             case spectrometer_analyzer:audit(Opts) of
-                ok ->
-                    maybe_halt(0);
                 {error, Reason} ->
-                    io:format("Audit failed, ~p.\n", [Reason]),
-                    maybe_halt(1)
+                    ?LOG_ERROR("Audit failed, ~p.", [Reason]),
+                    maybe_halt(1);
+                Unsupported ->
+                    maybe_halt(Unsupported)
             end;
         {command, ecosystem, Opts} ->
             case spectrometer_ecosystem:run(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
-                    io:format("Ecosystem scanning failed, ~p.\n", [Reason]),
+                    ?LOG_ERROR("Ecosystem scanning failed, ~p.", [
+                        Reason
+                    ]),
                     maybe_halt(1)
             end;
         {command, examine, Opts} ->
@@ -81,46 +111,125 @@ main(Args) ->
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
-                    io:format("Examine failed, ~p.\n", [Reason]),
+                    ?LOG_ERROR("Examine failed, ~p.", [Reason]),
                     maybe_halt(1)
             end;
         {command, supported, Opts} ->
             case spectrometer_atomvm:report_supported(Opts) of
-                ok -> maybe_halt(0);
-                {error, _} -> maybe_halt(1)
+                ok ->
+                    maybe_halt(0);
+                {error, Reason} ->
+                    ?LOG_ERROR("Unable to determine support: ~p", [Reason]),
+                    maybe_halt(1)
             end;
         {command, filter, Opts} ->
             case spectrometer_analyzer:filter(Opts) of
                 ok ->
                     maybe_halt(0);
                 {error, Reason} ->
-                    io:format("Filter failed: ~p\n", [Reason]),
+                    ?LOG_ERROR("Filter failed: ~p", [Reason]),
                     maybe_halt(1)
             end;
         {command, update, Opts} ->
             case spectrometer_updater:update(Opts) of
-                ok -> maybe_halt(0);
-                {error, _} -> maybe_halt(1)
+                ok ->
+                    maybe_halt(0);
+                {error, Reason} ->
+                    ?LOG_ERROR("Update failed: ~p", [Reason]),
+                    maybe_halt(1)
             end;
         {command, query, Opts} ->
             case spectrometer_atomvm:query(Opts) of
-                ok -> maybe_halt(0);
-                {error, _} -> maybe_halt(1)
+                ok ->
+                    maybe_halt(0);
+                {error, Reason} ->
+                    ?LOG_ERROR("Query failed: ~p", [Reason]),
+                    maybe_halt(1)
             end
     end.
 
 -doc false.
 -ifdef(TEST).
--spec maybe_halt(non_neg_integer()) -> ok | {error, {halt, non_neg_integer()}}.
+-spec maybe_halt(integer()) -> ok | {error, {halt, integer()}}.
 maybe_halt(0) ->
     ok;
 maybe_halt(Code) ->
     {error, {halt, Code}}.
 -else.
--spec maybe_halt(non_neg_integer()) -> no_return().
+-spec maybe_halt(integer()) -> no_return().
 maybe_halt(Code) ->
     halt(Code).
 -endif.
+
+-doc "Parse a log level string into a `t:logger:log_level()` atom.".
+-spec parse_log_level(string()) -> {ok, log_level()} | {error, string()}.
+parse_log_level("debug") -> {ok, debug};
+parse_log_level("info") -> {ok, info};
+parse_log_level("notice") -> {ok, notice};
+parse_log_level("warning") -> {ok, warning};
+parse_log_level("error") -> {ok, error};
+parse_log_level("critical") -> {ok, critical};
+parse_log_level("alert") -> {ok, alert};
+parse_log_level("emergency") -> {ok, emergency};
+parse_log_level(Other) -> {error, "unknown log level '" ++ Other ++ "'"}.
+
+-doc """
+Configure the logger based on options.
+
+Sets the application log level, and if a logfile is specified, adds a file handler with the appropriate level.
+Return the command configuration in an `ok` tuple (with logger options removed), or `{error, Reason}` on failure.
+""".
+-spec configure_logger([Args :: string()]) ->
+    {ok, CndArgs :: [string()]} | {error, term()}.
+configure_logger(Args) ->
+    configure_logger(Args, notice, false, []).
+
+configure_logger([], Level, File, Acc) ->
+    try
+        case logger:set_application_level(spectrometer, Level) of
+            ok ->
+                ok;
+            {error, Reason0} ->
+                io:format("Error setting logger level ~p: ~p\n", [
+                    Level, Reason0
+                ]),
+                error(Reason0)
+        end,
+        case File of
+            false ->
+                {ok, lists:reverse(Acc)};
+            _ ->
+                case
+                    logger:add_handler(log_to_file, logger_std_h, #{
+                        config => #{type => file, file => File}
+                    })
+                of
+                    ok ->
+                        {ok, lists:reverse(Acc)};
+                    {error, Reason1} ->
+                        io:format(
+                            "Error adding file logger handler for ~s: ~p\n", [
+                                File, Reason1
+                            ]
+                        ),
+                        error(Reason1)
+                end
+        end
+    catch
+        _:Reason ->
+            {error, Reason}
+    end;
+configure_logger(["--log", Level | Args], _, File, Acc) ->
+    case parse_log_level(Level) of
+        {ok, LogLevel} ->
+            configure_logger(Args, LogLevel, File, Acc);
+        {error, Reason} ->
+            {error, Reason}
+    end;
+configure_logger(["--logfile", File | Args], Level, _, Acc) ->
+    configure_logger(Args, Level, File, Acc);
+configure_logger([Opt | Args], Level, File, Acc) ->
+    configure_logger(Args, Level, File, [Opt | Acc]).
 
 -doc """
 Parse command-line arguments and return the command dispatch tuple.
@@ -129,7 +238,7 @@ Returns `help`, `{help, Command}`, `{command, Command, Opts}`, or
 `{error, Message}`.
 """.
 -spec parse_args([string()]) ->
-    {error, string()}
+    {error, term()}
     | version
     | help
     | {help, command_name()}
@@ -143,8 +252,6 @@ parse_args(["-h" | _]) ->
 parse_args(["help" | Args]) ->
     parse_help_args(Args);
 parse_args(["--version" | Args]) ->
-    parse_version_args(Args);
-parse_args(["version" | Args]) ->
     parse_version_args(Args);
 parse_args(["audit" | Rest]) ->
     case lists:any(fun(E) -> lists:member(E, ["-h", "--help"]) end, Rest) of
@@ -220,6 +327,8 @@ parse_args(["query" | Rest]) ->
 parse_args([Unknown | _]) ->
     {error, "Unsupported command " ++ Unknown}.
 
+-spec parse_help_args([string()]) ->
+    help | {help, command_name()} | {error, string()}.
 parse_help_args([Cmd | _]) ->
     case Cmd of
         "audit" -> {help, audit};
@@ -314,11 +423,11 @@ default_eco_opts() ->
         github => true,
         hex => true,
         limit => infinity,
-        resume => false
+        resume => false,
+        slow => false
     }.
 
--spec parse_ecosystem_args([string()], opts_map()) ->
-    parse_arg_result() | {error, Reason :: term()}.
+-spec parse_ecosystem_args([string()], opts_map()) -> parse_arg_result().
 parse_ecosystem_args([], Opts) ->
     Opts;
 parse_ecosystem_args(["--workers", N | Rest], Opts) ->
@@ -348,13 +457,14 @@ parse_ecosystem_args(["--stars", N | Rest], Opts) ->
     end;
 parse_ecosystem_args(["--resume" | Rest], Opts) ->
     parse_ecosystem_args(Rest, Opts#{resume => true});
+parse_ecosystem_args(["--slow" | Rest], Opts) ->
+    parse_ecosystem_args(Rest, Opts#{slow => true});
 parse_ecosystem_args(["--cache-dir", Dir | Rest], Opts) ->
     parse_ecosystem_args(Rest, Opts#{cache_dir => Dir});
 parse_ecosystem_args([Unknown | _], _Opts) ->
     {error, "Unknown option: " ++ Unknown}.
 
--spec parse_supported_args([string()], opts_map()) ->
-    parse_arg_result() | {error, Reason :: term()}.
+-spec parse_supported_args([string()], opts_map()) -> parse_arg_result().
 parse_supported_args([], Opts) ->
     Opts;
 parse_supported_args(["--module", Mod | Rest], Opts) ->

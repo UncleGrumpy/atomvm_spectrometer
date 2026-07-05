@@ -9,6 +9,31 @@
 
 -module(atomvm_spectrometer_tests).
 -include_lib("eunit/include/eunit.hrl").
+-include("ecosystem.hrl").
+
+%% Record definition for coordinator tests (mirrors spectrometer_ecosystem_coordinator)
+-record(coord_state, {
+    work :: [{github | hex, map()}],
+    scanned :: #{binary() => non_neg_integer()},
+    stats :: #{
+        {binary(), binary(), arity()} => #{
+            calls => non_neg_integer(),
+            repo_count => non_neg_integer(),
+            callers => ordsets:ordset(non_neg_integer())
+        }
+    },
+    package_map :: #{non_neg_integer() => binary()},
+    package_names :: #{binary() => non_neg_integer()},
+    next_package_id :: non_neg_integer(),
+    total_processed :: non_neg_integer(),
+    total_work :: non_neg_integer(),
+    unique_work :: non_neg_integer(),
+    since_save :: non_neg_integer(),
+    pending_work :: #{reference() => {node(), binary(), {github | hex, map()}}},
+    ready_workers :: sets:set(node()),
+    parent :: pid(),
+    pages_consumed :: #{github => pos_integer(), hex => pos_integer()}
+}).
 
 %% =============================================================================
 %% maybe_halt/1 tests - Test mode exit handling
@@ -712,18 +737,19 @@ parse_query_string_zero_arity_test_() ->
     end}.
 
 parse_query_string_without_arity_test_() ->
-    {"returns ok for module query without arity", fun() ->
+    {"returns ok for module:fun query without arity", fun() ->
         ?assertEqual(
             {ok, <<"module_xyz">>, <<"foo">>},
             spectrometer_atomvm:parse_query_string("module_xyz:foo")
         )
     end}.
 
-parse_invalid_query_string_test_() ->
-    {"returns error for invalid query string", fun() ->
-        {error, _} = spectrometer_atomvm:parse_query_string("foobar"),
-        {error, Msg1} = spectrometer_atomvm:parse_query_string("foobar"),
-        ?assert(string:str(Msg1, "Invalid format") > 0)
+parse_query_string_mod_only_test_() ->
+    {"returns ok for module query without fun", fun() ->
+        ?assertEqual(
+            {ok, <<"foo">>},
+            spectrometer_atomvm:parse_query_string("foo")
+        )
     end}.
 
 parse_query_string_invalid_arity_test_() ->
@@ -813,49 +839,71 @@ cleanup_temp_dir(Dir) ->
     end.
 
 format_platforms_test_() ->
-    {"formats platform lists", fun() ->
+    {"formats platform version maps", fun() ->
         ?assertEqual(
-            "all", spectrometer_atomvm:format_platforms(all)
-        ),
-        ?assertEqual("esp32", spectrometer_atomvm:format_platforms([esp32])),
-        ?assertEqual(
-            "esp32, rp2", spectrometer_atomvm:format_platforms([esp32, rp2])
+            "all since: v0.5.0",
+            spectrometer_atomvm:format_platform_versions(#{all => {0, 5, 0}})
         ),
         ?assertEqual(
-            "esp32, stm32, rp2",
-            spectrometer_atomvm:format_platforms([esp32, stm32, rp2])
+            "esp32 since: v0.5.0",
+            spectrometer_atomvm:format_platform_versions(#{esp32 => {0, 5, 0}})
+        ),
+        ?assertEqual(
+            "esp32 since: v0.5.0, rp2 since: v0.6.0",
+            spectrometer_atomvm:format_platform_versions(
+                #{esp32 => {0, 5, 0}, rp2 => {0, 6, 0}}
+            )
+        ),
+        ?assertEqual(
+            "esp32 since: v0.5.0, rp2 since: v0.6.0, stm32 since: v0.5.0",
+            spectrometer_atomvm:format_platform_versions(
+                #{esp32 => {0, 5, 0}, stm32 => {0, 5, 0}, rp2 => {0, 6, 0}}
+            )
         )
     end}.
 
 merge_repo_stats_test_() ->
-    {"merges repository statistics", fun() ->
+    {"merges repository statistics with caller tracking", fun() ->
         RepoStats = #{
             {lists, map, 2} => 10,
             {io, format, 2} => 5
         },
         GlobalStats = #{
-            {lists, map, 2} => {20, 2},
-            {string, len, 1} => {7, 1}
+            {lists, map, 2} => #{
+                calls => 20, repo_count => 2, callers => ordsets:from_list([1])
+            },
+            {string, len, 1} => #{
+                calls => 7, repo_count => 1, callers => ordsets:from_list([1])
+            }
         },
-        Result = spectrometer_ecosystem:merge_repo_stats(
-            RepoStats, GlobalStats
+        Result = spectrometer_ecosystem_coordinator:merge_repo_stats_with_callers(
+            RepoStats, 2, GlobalStats
         ),
-        %% Should sum total calls and repo count
-        {TotalCalls1, RepoCount1} = maps:get({lists, map, 2}, Result),
+        #{
+            calls := TotalCalls1,
+            repo_count := RepoCount1,
+            callers := Callers1
+        } = maps:get({lists, map, 2}, Result),
         ?assertEqual(30, TotalCalls1),
         ?assertEqual(3, RepoCount1),
-        {_, RepoCount2} = maps:get({io, format, 2}, Result),
-        ?assertEqual(1, RepoCount2)
+        ?assertEqual(ordsets:from_list([1, 2]), Callers1),
+        #{
+            calls := _,
+            repo_count := RepoCount2,
+            callers := Callers2
+        } = maps:get({io, format, 2}, Result),
+        ?assertEqual(1, RepoCount2),
+        ?assertEqual(ordsets:from_list([2]), Callers2)
     end}.
 
 work_key_test_() ->
     {"generates unique work keys", fun() ->
         ?assertEqual(
-            "github:user/repo",
+            <<"github:user/repo">>,
             spectrometer_ecosystem:work_key(github, #{full_name => "user/repo"})
         ),
         ?assertEqual(
-            "hex:jsx",
+            <<"hex:jsx">>,
             spectrometer_ecosystem:work_key(hex, #{name => "jsx"})
         )
     end}.
@@ -941,4 +989,283 @@ usage_functions_exist_test_() ->
         ?assertEqual(ok, spectrometer_help:usage(filter)),
         ?assertEqual(ok, spectrometer_help:usage(update)),
         ?assertEqual(ok, spectrometer_help:usage(query))
+    end}.
+
+%% =============================================================================
+%% Eco dedup: package_map_valid tests
+%% =============================================================================
+
+package_map_valid_test_() ->
+    {"validates package map format", fun() ->
+        ?assert(
+            spectrometer_ecosystem:package_map_valid(#{
+                1 => <<"repo">>, 2 => <<"jsx">>
+            })
+        ),
+        ?assertNot(
+            spectrometer_ecosystem:package_map_valid(#{
+                1 => <<"user/repo">>
+            })
+        )
+    end}.
+
+%% =============================================================================
+%% Eco dedup: find_package_id tests
+%% =============================================================================
+
+find_package_id_test_() ->
+    {"finds existing package ids by canonical name", fun() ->
+        PackageNames = #{
+            <<"repo">> => 1,
+            <<"jsx">> => 2
+        },
+        ?assertEqual(
+            {ok, 1},
+            spectrometer_ecosystem_coordinator:find_package_id(
+                <<"repo">>, PackageNames
+            )
+        ),
+        ?assertEqual(
+            error,
+            spectrometer_ecosystem_coordinator:find_package_id(
+                <<"missing">>, PackageNames
+            )
+        )
+    end}.
+
+%% =============================================================================
+%% Eco dedup: resume_start_page tests
+%% =============================================================================
+
+resume_start_page_test_() ->
+    {"resume_start_page uses PagesConsumed map", fun() ->
+        ?assertEqual(
+            1,
+            spectrometer_ecosystem:resume_start_page(#{}, github, true, false)
+        ),
+        ?assertEqual(
+            1,
+            spectrometer_ecosystem:resume_start_page(#{}, github, false, false)
+        ),
+        ?assertEqual(
+            1,
+            spectrometer_ecosystem:resume_start_page(
+                #{github => 5}, hex, true, false
+            )
+        ),
+        ?assertEqual(
+            5,
+            spectrometer_ecosystem:resume_start_page(
+                #{github => 5}, github, true, false
+            )
+        ),
+        ?assertEqual(
+            1,
+            spectrometer_ecosystem:resume_start_page(
+                #{hex => 1}, hex, true, false
+            )
+        ),
+        ?assertEqual(
+            1,
+            spectrometer_ecosystem:resume_start_page(
+                #{hex => 1}, github, true, false
+            )
+        )
+    end}.
+
+dispatch_ready_completes_exhausted_work_test_() ->
+    {"dispatch_ready completes when all work is already scanned", fun() ->
+        TmpDir = filename:join(
+            "/tmp",
+            "spectrometer_ecosystem_test_cache_" ++
+                integer_to_list(erlang:unique_integer([positive]))
+        ),
+        ok = file:make_dir(TmpDir),
+        OldCache = application:get_env(spectrometer, cache_dir),
+        application:set_env(spectrometer, cache_dir, TmpDir),
+        try
+            Work = [{github, #{full_name => "owner/repo"}}],
+            Scanned = #{<<"github:owner/repo">> => 1},
+            State = #coord_state{
+                work = Work,
+                scanned = Scanned,
+                stats = #{},
+                package_map = #{},
+                package_names = #{},
+                next_package_id = 1,
+                total_processed = 1,
+                total_work = 1,
+                unique_work = 1,
+                since_save = 0,
+                pending_work = #{},
+                ready_workers = sets:add_element(
+                    node(), sets:new([{version, 2}])
+                ),
+                parent = self(),
+                pages_consumed = #{}
+            },
+            {stop, NewState} = spectrometer_ecosystem_coordinator:dispatch_ready(
+                State
+            ),
+            ?assertEqual([], NewState#coord_state.work),
+            ?assertEqual(#{}, NewState#coord_state.pending_work),
+            ?assertEqual(
+                {coordinator_done, #{}},
+                receive
+                    Msg -> Msg
+                after 1000 ->
+                    timeout
+                end
+            )
+        after
+            case OldCache of
+                undefined ->
+                    application:unset_env(spectrometer, cache_dir);
+                {ok, CacheDir} ->
+                    application:set_env(spectrometer, cache_dir, CacheDir)
+            end,
+            _ = file:del_dir_r(TmpDir)
+        end
+    end}.
+
+%% =============================================================================
+%% Eco dedup: record_duplicate_package tests
+%% =============================================================================
+
+record_duplicate_package_test_() ->
+    {"records duplicate package under original id", fun() ->
+        Parent = spawn_link(fun() ->
+            receive
+                {coordinator_done, _} -> ok
+            after 5000 ->
+                ok
+            end
+        end),
+        State = #coord_state{
+            work = [],
+            scanned = #{},
+            stats = #{},
+            package_map = #{1 => <<"repo">>},
+            package_names = #{<<"repo">> => 1},
+            next_package_id = 2,
+            total_processed = 0,
+            total_work = 2,
+            unique_work = 0,
+            since_save = 0,
+            pending_work = #{},
+            ready_workers = sets:new([{version, 2}]),
+            parent = Parent,
+            pages_consumed = #{}
+        },
+        {stop, NewState} =
+            spectrometer_ecosystem_coordinator:record_duplicate_package(
+                <<"github:fork/repo">>,
+                1,
+                [],
+                [],
+                #{},
+                sets:new([{version, 2}]),
+                State
+            ),
+        ?assertEqual(
+            #{<<"github:fork/repo">> => 1}, NewState#coord_state.scanned
+        ),
+        ?assertEqual(1, NewState#coord_state.total_processed),
+        ?assertEqual(0, NewState#coord_state.unique_work),
+        ?assertEqual(#{}, NewState#coord_state.stats)
+    end}.
+
+%% =============================================================================
+%% Eco dedup: handle_worker_result package map tests
+%% =============================================================================
+
+handle_worker_result_package_map_test_() ->
+    {"stores canonical package name for github work", fun() ->
+        Parent = spawn_link(fun() ->
+            receive
+                {coordinator_done, _} -> ok
+            after 5000 ->
+                ok
+            end
+        end),
+        RepoStats = #{{<<"lists">>, <<"map">>, 2} => 3},
+        State = #coord_state{
+            work = [{github, #{full_name => "user/other"}}],
+            package_names = #{},
+            package_map = #{},
+            next_package_id = 1,
+            scanned = #{},
+            stats = #{},
+            total_processed = 0,
+            since_save = 0,
+            total_work = 2,
+            unique_work = 0,
+            pending_work = #{},
+            ready_workers = sets:new([{version, 2}]),
+            parent = Parent,
+            pages_consumed = #{}
+        },
+        Item = {github, #{full_name => "user/repo"}},
+        {continue, NewState} =
+            spectrometer_ecosystem_coordinator:handle_worker_result(
+                node(),
+                Item,
+                <<"github:user/repo">>,
+                RepoStats,
+                [{github, #{full_name => "user/other"}}],
+                #{},
+                sets:new([{version, 2}]),
+                State
+            ),
+        ?assertEqual(#{1 => <<"repo">>}, NewState#coord_state.package_map),
+        ?assertEqual(#{<<"repo">> => 1}, NewState#coord_state.package_names),
+        ?assertEqual(
+            #{<<"github:user/repo">> => 1},
+            NewState#coord_state.scanned
+        ),
+        ?assertEqual(1, NewState#coord_state.unique_work)
+    end}.
+
+%% =============================================================================
+%% Eco dedup: hex-github cross-dedup test
+%% =============================================================================
+
+hex_package_matches_github_canonical_name_test_() ->
+    {"maps hex package to existing github package id", fun() ->
+        Parent = spawn_link(fun() ->
+            receive
+                {coordinator_done, _} -> ok
+            after 5000 ->
+                ok
+            end
+        end),
+        State = #coord_state{
+            work = [],
+            scanned = #{},
+            stats = #{},
+            package_map = #{1 => <<"repo">>},
+            package_names = #{<<"repo">> => 1},
+            next_package_id = 2,
+            total_processed = 0,
+            total_work = 1,
+            unique_work = 0,
+            since_save = 0,
+            pending_work = #{},
+            ready_workers = sets:new([{version, 2}]),
+            parent = Parent,
+            pages_consumed = #{}
+        },
+        {stop, NewState} =
+            spectrometer_ecosystem_coordinator:record_duplicate_package(
+                <<"hex:repo">>,
+                1,
+                [],
+                [],
+                #{},
+                sets:new([{version, 2}]),
+                State
+            ),
+        ?assertEqual(#{<<"hex:repo">> => 1}, NewState#coord_state.scanned),
+        ?assertEqual(#{1 => <<"repo">>}, NewState#coord_state.package_map),
+        ?assertEqual(#{}, NewState#coord_state.stats)
     end}.

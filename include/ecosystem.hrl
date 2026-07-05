@@ -10,5 +10,7 @@
 -define(ECOSYSTEM_HRL, true).
 
 -define(ECOSYSTEM_STATE, "beam_ecosystem.bin").
+-define(GITHUB_MAX_PER_QUERY, 1000).
+-define(HEX_PER_PAGE, 100).
 
 -endif.

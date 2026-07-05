@@ -255,13 +255,13 @@ for PRE_TAG in ${PRE_TAGS_LIST}; do
     fi
 done
 
-# Sort tags by version (newest first for processing)
+# Sort tags by version (oldest first for processing)
 # Use git's sort if available, otherwise fall back to lexical sort
 if git tag -l --sort=v:refname "v*.*.*" 2>/dev/null | head -1 >/dev/null 2>&1; then
-    sort -rV "${TMP_TAG_FILE}" > "${TMP_TAG_FILE}.sorted" 2>/dev/null || sort -r "${TMP_TAG_FILE}" > "${TMP_TAG_FILE}.sorted"
+    sort -V "${TMP_TAG_FILE}" > "${TMP_TAG_FILE}.sorted" 2>/dev/null || sort "${TMP_TAG_FILE}" > "${TMP_TAG_FILE}.sorted"
 else
     # Lexical sort is acceptable for final ordering
-    sort -r "${TMP_TAG_FILE}" > "${TMP_TAG_FILE}.sorted"
+    sort "${TMP_TAG_FILE}" > "${TMP_TAG_FILE}.sorted"
 fi
 mv "${TMP_TAG_FILE}.sorted" "${TMP_TAG_FILE}"
 
